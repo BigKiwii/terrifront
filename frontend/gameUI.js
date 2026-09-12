@@ -1,0 +1,610 @@
+(function () {
+  'use strict';
+
+  const canvas = document.querySelector('#game-canvas');
+  const mapFrame = document.querySelector('.map-frame');
+  const spawnHud = document.querySelector('#spawn-hud');
+  const spawnTime = document.querySelector('#spawn-time');
+  const progressBar = document.querySelector('#spawn-progress-bar');
+  const spawnMessage = document.querySelector('#spawn-message');
+  const troopDisplay = document.querySelector('#troop-display');
+  const troopCount = document.querySelector('#troop-count');
+  const territoryCount = document.querySelector('#territory-count');
+  const leaderboard = document.querySelector('#leaderboard');
+  const cancelButton = document.querySelector('#cancel-button');
+  const attackRatioPanel = document.querySelector('#attack-ratio-panel');
+  const powerSlider = document.querySelector('#power-slider');
+  const ratioPercent = document.querySelector('#ratio-percent');
+  const ratioTroops = document.querySelector('#ratio-troops');
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const terrainCanvas = document.createElement('canvas');
+  const terrainContext = terrainCanvas.getContext('2d');
+  const territoryCanvas = document.createElement('canvas');
+  const territoryContext = territoryCanvas.getContext('2d');
+  const renderScale = 1;
+  let gameData = null;
+  let zoom = 1;
+  let panX = 0;
+  let panY = 0;
+  let dragStart = null;
+  let dragMoved = false;
+  let spawnPhase = null;
+  let selectedPosition = null;
+  let selectedColor = '#69c878';
+  let spawnSubmitHandler = null;
+  let timerHandle = null;
+  let terrain = null;
+  let spawnPoints = new Set();
+  let selectionLocked = false;
+  let localPlayerId = null;
+  let activeGame = false;
+  let mapActionHandler = null;
+  let mapScale = 1;
+  let hoverPosition = null;
+  let playerColors = new Map();
+  let localCapitalCells = new Set();
+  let confirmedPosition = null;
+  let currentPower = 500;
+  let territoryVersion = 0;
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  function updatePowerSlider() {
+    const percentage = Math.round(currentPower / 10);
+    powerSlider.value = percentage;
+    powerSlider.style.setProperty('--slider-fill', `${percentage}%`);
+    powerSlider.classList.toggle('is-aggressive', percentage > 70);
+  }
+
+  function updateRatioDisplay() {
+    const percentage = Number(powerSlider.value);
+    currentPower = percentage * 10;
+    powerSlider.style.setProperty('--slider-fill', `${percentage}%`);
+    powerSlider.classList.toggle('is-aggressive', percentage > 70);
+    ratioPercent.textContent = `${percentage}%`;
+    const localPlayer = gameData?.players?.find((player) => player.playerId === localPlayerId);
+    const troops = Math.floor((localPlayer?.troops || 0) * percentage / 100);
+    ratioTroops.textContent = `${troops.toLocaleString()} troops`;
+  }
+
+  function applyMapTransform() {
+    const maxPanX = Math.max(260, (mapFrame.clientWidth * zoom - window.innerWidth) / 2 + 100);
+    const maxPanY = Math.max(220, (mapFrame.clientHeight * zoom - window.innerHeight) / 2 + 100);
+    panX = clamp(panX, -maxPanX, maxPanX);
+    panY = clamp(panY, -maxPanY, maxPanY);
+    mapFrame.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
+  }
+
+  function resetMapTransform() {
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+    applyMapTransform();
+  }
+
+  function resizeCanvas() {
+    const width = gameData?.map.width || 876;
+    const height = gameData?.map.height || 694;
+    mapScale = renderScale * Math.min(window.devicePixelRatio || 1, 2);
+    canvas.style.width = `${mapFrame.clientWidth}px`;
+    canvas.style.height = `${mapFrame.clientHeight}px`;
+    canvas.width = Math.ceil(width * mapScale);
+    canvas.height = Math.ceil(height * mapScale);
+    context.setTransform(mapScale, 0, 0, mapScale, 0, 0);
+    context.imageSmoothingEnabled = false;
+    if (terrain) {
+      buildTerrainLayer();
+      draw();
+    }
+  }
+
+  function mapMetrics() {
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    const imageWidth = width;
+    const imageHeight = height;
+    return {
+      width,
+      height,
+      imageWidth,
+      imageHeight,
+      offsetX: (width - imageWidth) / 2,
+      offsetY: (height - imageHeight) / 2,
+      cellWidth: imageWidth / gameData.map.width,
+      cellHeight: imageHeight / gameData.map.height
+    };
+  }
+
+  function drawCapital(position, color) {
+    if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return;
+    const centerX = position % gameData.map.width;
+    const centerY = Math.floor(position / gameData.map.width);
+    const colors = warFrontPlayerColors(color);
+    context.save();
+    context.lineWidth = 1;
+    context.fillStyle = colors.territory;
+    context.strokeStyle = colors.border;
+    context.lineWidth = 1;
+    for (let y = -2; y <= 2; y += 1) {
+      for (let x = -2; x <= 2; x += 1) {
+        if (Math.abs(x) === 2 && Math.abs(y) === 2) continue;
+        context.fillRect(centerX + x, centerY + y, 1, 1);
+        context.strokeRect(centerX + x, centerY + y, 1, 1);
+      }
+    }
+    context.restore();
+  }
+
+  function decodeTerrain(encodedTerrain) {
+    const binary = atob(encodedTerrain);
+    terrain = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) terrain[index] = binary.charCodeAt(index);
+  }
+
+  async function loadTerrain(mapData) {
+    const terrainUrl = window.location.protocol === 'file:'
+      ? `http://localhost:8080${mapData.terrainUrl}`
+      : new URL(mapData.terrainUrl, window.location.href).href;
+    const response = await fetch(terrainUrl);
+    if (!response.ok) throw new Error(`Terrain request failed: ${response.status}`);
+    terrain = new Uint8Array(await response.arrayBuffer());
+    buildTerrainLayer();
+    draw();
+  }
+
+  function isValidCapital(position) {
+    if (!terrain) return false;
+    const centerX = position % gameData.map.width;
+    const centerY = Math.floor(position / gameData.map.width);
+    for (let y = centerY - 2; y <= centerY + 2; y += 1) {
+      for (let x = centerX - 2; x <= centerX + 2; x += 1) {
+        if (x < 0 || x >= gameData.map.width || y < 0 || y >= gameData.map.height) return false;
+        if (Math.abs(x - centerX) === 2 && Math.abs(y - centerY) === 2) continue;
+        if ((terrain[y * gameData.map.width + x] & 0x80) === 0) return false;
+      }
+    }
+    return true;
+  }
+
+  function hashPosition(position) {
+    let value = position + 1;
+    value = (value ^ (value >>> 16)) * 0x45d9f3b;
+    value = (value ^ (value >>> 16)) * 0x45d9f3b;
+    return (value ^ (value >>> 16)) >>> 0;
+  }
+
+  function buildTerrainLayer() {
+    if (!gameData || !terrain) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    terrainCanvas.width = width;
+    terrainCanvas.height = height;
+    const pixels = terrainContext.createImageData(width, height);
+    for (let position = 0; position < terrain.length; position += 1) {
+      const pixel = position * 4;
+      const land = (terrain[position] & 0x80) !== 0;
+      const magnitude = terrain[position] & 0x1f;
+      if (land) {
+        pixels.data[pixel] = 126 + magnitude * 3;
+        pixels.data[pixel + 1] = 157 + Math.min(30, magnitude);
+        pixels.data[pixel + 2] = 108 + Math.min(45, magnitude * 2);
+      } else {
+        pixels.data[pixel] = 25;
+        pixels.data[pixel + 1] = 25;
+        pixels.data[pixel + 2] = 95;
+      }
+      pixels.data[pixel + 3] = 255;
+    }
+    terrainContext.putImageData(pixels, 0, 0);
+  }
+
+  function warFrontPlayerColors(color) {
+    const hexMatch = String(color).match(/^#([0-9a-f]{6})$/i);
+    if (hexMatch) {
+      const red = parseInt(hexMatch[1].slice(0, 2), 16);
+      const green = parseInt(hexMatch[1].slice(2, 4), 16);
+      const blue = parseInt(hexMatch[1].slice(4, 6), 16);
+      return {
+        territory: `rgb(${red},${green},${blue})`,
+        border: `rgba(${Math.floor(red * 0.6)},${Math.floor(green * 0.6)},${Math.floor(blue * 0.6)},1)`
+      };
+    }
+
+    const match = String(color).match(/hsl\(\s*([\d.-]+),\s*([\d.-]+)%\s*,\s*([\d.-]+)%\s*\)/);
+    if (!match) return { territory: color, border: color };
+    const hue = Number(match[1]);
+    const saturation = Number(match[2]) * 0.5;
+    return {
+      territory: `hsl(${hue}, ${saturation}%, 58%)`,
+      border: `hsla(${hue}, ${saturation}%, 37.5%, 1)`
+    };
+  }
+
+  function isBorderCell(position, owner) {
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    const x = position % width;
+    const y = Math.floor(position / width);
+    return x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
+      gameData.owners[position - 1] !== owner || gameData.owners[position + 1] !== owner ||
+      gameData.owners[position - width] !== owner || gameData.owners[position + width] !== owner;
+  }
+
+  function paintTerritoryTile(position) {
+    if (position < 0 || position >= gameData.owners.length) return;
+    const width = gameData.map.width;
+    const owner = gameData.owners[position];
+    const x = position % width;
+    const y = Math.floor(position / width);
+    territoryContext.clearRect(x, y, 1, 1);
+    if (!owner) return;
+    const colors = warFrontPlayerColors(playerColors.get(owner) || selectedColor);
+    territoryContext.fillStyle = colors.territory;
+    territoryContext.fillRect(x, y, 1, 1);
+    if (isBorderCell(position, owner)) {
+      territoryContext.fillStyle = colors.border;
+      territoryContext.fillRect(x, y, 1, 1);
+    }
+  }
+
+  function rebuildTerritoryLayer() {
+    if (!gameData?.owners) return;
+    territoryCanvas.width = gameData.map.width;
+    territoryCanvas.height = gameData.map.height;
+    territoryContext.clearRect(0, 0, gameData.map.width, gameData.map.height);
+    for (let position = 0; position < gameData.owners.length; position += 1) {
+      paintTerritoryTile(position);
+    }
+  }
+
+  function updateTerritoryLayer(changes) {
+    const affected = new Set();
+    for (const change of changes || []) {
+      affected.add(change.position);
+      for (const neighbor of mapNeighbors(change.position)) affected.add(neighbor);
+    }
+    for (const position of affected) paintTerritoryTile(position);
+  }
+
+  function mapNeighbors(position) {
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    const x = position % width;
+    const neighbors = [];
+    if (x > 0) neighbors.push(position - 1);
+    if (x < width - 1) neighbors.push(position + 1);
+    if (position >= width) neighbors.push(position - width);
+    if (position < width * height - width) neighbors.push(position + width);
+    return neighbors;
+  }
+
+  function drawHover() {
+    if (hoverPosition === null || !spawnPhase || selectionLocked || !isValidCapital(hoverPosition)) return;
+    const x = hoverPosition % gameData.map.width;
+    const y = Math.floor(hoverPosition / gameData.map.width);
+    context.save();
+    context.strokeStyle = '#67d4dc';
+    context.lineWidth = 1;
+    context.globalAlpha = 0.9;
+    context.strokeRect(x - 2.5, y - 2.5, 6, 6);
+    context.restore();
+  }
+
+  function drawSpawnPoints() {
+    if (!spawnPhase || spawnPoints.size === 0) return;
+    context.save();
+    context.fillStyle = 'rgba(154, 162, 166, 0.9)';
+    context.globalAlpha = 0.9;
+    for (const position of spawnPoints) {
+      if (!isValidCapital(position)) continue;
+      const centerX = position % gameData.map.width;
+      const centerY = Math.floor(position / gameData.map.width);
+      for (let y = -2; y <= 2; y += 1) {
+        for (let x = -2; x <= 2; x += 1) {
+          if (Math.abs(x) === 2 && Math.abs(y) === 2) continue;
+          context.fillRect(centerX + x, centerY + y, 1, 1);
+        }
+      }
+    }
+    context.restore();
+  }
+
+  function renderLeaderboard() {
+    if (!gameData?.players || !leaderboard) return;
+    const ranked = [...gameData.players].sort((a, b) =>
+      (b.territorySize || 0) - (a.territorySize || 0) || (b.troops || 0) - (a.troops || 0));
+    leaderboard.innerHTML = `<div class="leaderboard-title">LIVE RANKING <span>${ranked.length} PLAYERS</span></div>`;
+    ranked.forEach((player, index) => {
+      const ownerId = Number(player.playerId.replace('player-', ''));
+      const color = playerColors.get(ownerId) || '#69c878';
+      const row = document.createElement('div');
+      row.className = `leaderboard-row${player.playerId === localPlayerId ? ' is-local' : ''}${player.isBot ? ' is-bot' : ''}${player.isAlive === false ? ' is-eliminated' : ''}`;
+      row.innerHTML = `<span class="leaderboard-rank">${index + 1}</span><span class="leaderboard-swatch" style="background:${color}"></span><span class="leaderboard-name"></span><span class="leaderboard-values">${(player.troops || 0).toLocaleString()}<br>${player.territorySize || 0} tiles</span>`;
+      row.querySelector('.leaderboard-name').textContent = `${player.isBot ? 'BOT ' : ''}${player.playerName || player.playerId}`;
+      leaderboard.appendChild(row);
+    });
+  }
+
+  function updateLocalTroops(player) {
+    if (!player) return;
+    troopCount.textContent = (player.troops || 0).toLocaleString();
+    territoryCount.textContent = player.territorySize || 0;
+    troopDisplay.classList.toggle('is-attacking', Boolean(player.expansionActive));
+    cancelButton.hidden = !player.expansionActive;
+    updateRatioDisplay();
+  }
+
+  function draw() {
+    if (!gameData || !terrain) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    context.clearRect(0, 0, width, height);
+    context.drawImage(terrainCanvas, 0, 0, width, height);
+    if (territoryCanvas.width !== width || territoryCanvas.height !== height) rebuildTerritoryLayer();
+    context.drawImage(territoryCanvas, 0, 0, width, height);
+    drawSpawnPoints();
+    if (!activeGame && gameData.players) {
+      for (const player of gameData.players) {
+        if (player.spawnPosition == null || !player.capitalColor) continue;
+        if (player.playerId === localPlayerId) continue;
+        drawCapital(player.spawnPosition, player.capitalColor);
+      }
+    }
+    if (!activeGame && selectedPosition !== null) drawCapital(selectedPosition, selectedColor);
+    TerriPlayerLabelRenderer.draw(context, gameData, zoom, territoryVersion);
+    drawHover();
+  }
+
+  function randomColor() {
+    const colors = ['#69c878', '#e86b52', '#6ba8e8', '#d9b84c', '#bb75d4', '#e889b1'];
+    return colors[Math.floor(Math.random() * colors.length)];
+  }
+
+  function positionFromPointer(event) {
+    const rectangle = canvas.getBoundingClientRect();
+    const localX = (event.clientX - rectangle.left) * (gameData.map.width / rectangle.width);
+    const localY = (event.clientY - rectangle.top) * (gameData.map.height / rectangle.height);
+    const metrics = mapMetrics();
+    const mapX = Math.floor((localX - metrics.offsetX) / metrics.cellWidth);
+    const mapY = Math.floor((localY - metrics.offsetY) / metrics.cellHeight);
+    if (mapX < 0 || mapX >= gameData.map.width || mapY < 0 || mapY >= gameData.map.height) return null;
+    return mapY * gameData.map.width + mapX;
+  }
+
+  function updateSpawnTimer() {
+    if (!spawnPhase) return;
+    const remainingMs = Math.max(0, spawnPhase.deadline - Date.now());
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
+    spawnTime.textContent = remainingSeconds;
+    progressBar.style.width = `${Math.max(0, remainingMs / spawnPhase.durationMs) * 100}%`;
+    progressBar.classList.toggle('is-critical', remainingMs <= 5000);
+    if (remainingMs <= 1000 && !selectionLocked) {
+      selectionLocked = true;
+      spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
+    }
+    if (remainingMs === 0) {
+      clearInterval(timerHandle);
+      spawnMessage.textContent = 'SPAWN LOCKED // WAITING FOR SERVER';
+    }
+  }
+
+  mapFrame.addEventListener('wheel', function (event) {
+    if (event.shiftKey) {
+      event.preventDefault();
+      powerSlider.value = clamp(Number(powerSlider.value) + (event.deltaY > 0 ? -5 : 5), 1, 100);
+      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
+      updateRatioDisplay();
+      return;
+    }
+    event.preventDefault();
+    zoom = clamp(zoom * (event.deltaY > 0 ? 0.9 : 1.1), 0.1, 200);
+    applyMapTransform();
+  }, { passive: false });
+
+  mapFrame.addEventListener('pointerdown', function (event) {
+    dragStart = { x: event.clientX - panX, y: event.clientY - panY };
+    dragMoved = false;
+    mapFrame.setPointerCapture(event.pointerId);
+    mapFrame.classList.add('is-dragging');
+  });
+
+  mapFrame.addEventListener('pointermove', function (event) {
+    if (!dragStart) return;
+    if (Math.abs(event.clientX - dragStart.x - panX) > 6 || Math.abs(event.clientY - dragStart.y - panY) > 6) dragMoved = true;
+    panX = event.clientX - dragStart.x;
+    panY = event.clientY - dragStart.y;
+    applyMapTransform();
+    hoverPosition = positionFromPointer(event);
+    draw();
+  });
+
+  mapFrame.addEventListener('pointerleave', function () {
+    hoverPosition = null;
+    draw();
+  });
+
+  function stopDragging(event) {
+    if (!dragStart) return;
+    const wasClick = !dragMoved;
+    dragStart = null;
+    mapFrame.classList.remove('is-dragging');
+    if (mapFrame.hasPointerCapture(event.pointerId)) mapFrame.releasePointerCapture(event.pointerId);
+    if (wasClick && spawnPhase && !selectionLocked) {
+      const position = positionFromPointer(event);
+      if (position !== null) {
+        if (!isValidCapital(position)) {
+          spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
+          hoverPosition = null;
+          draw();
+          return;
+        }
+        selectedPosition = position;
+        selectedColor = randomColor();
+        spawnMessage.textContent = 'CAPITAL SELECTED // CLICK AGAIN TO REPLACE';
+        spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
+        draw();
+      }
+    } else if (wasClick && activeGame) {
+      const position = positionFromPointer(event);
+      const ownerId = Number(localPlayerId.replace('player-', ''));
+      if (position !== null && (terrain[position] & 0x80) !== 0 && gameData.owners[position] !== ownerId) {
+        troopDisplay.classList.add('is-attacking');
+        mapActionHandler?.({ playerId: localPlayerId, position });
+      }
+    }
+    hoverPosition = null;
+    draw();
+  }
+
+  mapFrame.addEventListener('pointerup', stopDragging);
+  mapFrame.addEventListener('pointercancel', stopDragging);
+  window.addEventListener('resize', function () {
+    resizeCanvas();
+    applyMapTransform();
+  });
+
+  powerSlider.addEventListener('input', function () {
+    localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
+    updateRatioDisplay();
+  });
+
+  cancelButton.addEventListener('click', function () {
+    window.TerriCommunicator?.send(window.TerriProtocolCodes.CANCEL_EXPANSION, { playerId: localPlayerId });
+    cancelButton.hidden = true;
+  });
+
+  window.addEventListener('keydown', function (event) {
+    if (!activeGame || event.target.tagName === 'INPUT') return;
+    if (event.key === '1') powerSlider.value = Math.max(1, Number(powerSlider.value) - 5);
+    if (event.key === '2') powerSlider.value = Math.min(100, Number(powerSlider.value) + 5);
+    if (event.key === '1' || event.key === '2') {
+      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
+      updateRatioDisplay();
+    }
+  });
+
+  const savedRatio = localStorage.getItem('terrifront-attack-ratio');
+  if (savedRatio !== null && Number(savedRatio) >= 1 && Number(savedRatio) <= 100) powerSlider.value = savedRatio;
+  updateRatioDisplay();
+
+  window.TerriGameUI = {
+    onSpawnSubmit(handler) {
+      spawnSubmitHandler = handler;
+    },
+    start(data) {
+      gameData = data;
+      territoryVersion = 0;
+      localPlayerId = data.playerId;
+      activeGame = false;
+      gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
+      gameData.owners = new Int32Array(data.map.width * data.map.height);
+      terrain = null;
+      loadTerrain(data.map).catch((error) => {
+        console.error('Unable to load terrain map:', error);
+        spawnMessage.textContent = 'MAP DATA UNAVAILABLE // REFRESH TO RETRY';
+      });
+      mapFrame.style.aspectRatio = `${data.map.width} / ${data.map.height}`;
+      selectedPosition = null;
+      confirmedPosition = null;
+      localCapitalCells = new Set();
+      hoverPosition = null;
+      playerColors = new Map();
+      spawnPhase = null;
+      selectionLocked = false;
+      resetMapTransform();
+      resizeCanvas();
+    },
+    beginSpawnPhase(data) {
+      activeGame = false;
+      troopDisplay.hidden = true;
+      attackRatioPanel.hidden = true;
+      leaderboard.hidden = true;
+      spawnPhase = data;
+      spawnPoints = new Set(data.spawnPoints || []);
+      selectionLocked = false;
+      spawnHud.hidden = false;
+      spawnMessage.textContent = 'CHOOSE A LAND POSITION FOR YOUR CAPITAL';
+      clearInterval(timerHandle);
+      updateSpawnTimer();
+      timerHandle = setInterval(updateSpawnTimer, 50);
+    },
+    confirmSpawn(data) {
+      spawnMessage.textContent = 'CAPITAL CONFIRMED // GAME STARTING';
+      if (data.color) selectedColor = data.color;
+      const previousCells = [...localCapitalCells];
+      previousCells.forEach((cell) => { gameData.owners[cell] = 0; });
+      localCapitalCells = new Set(data.cells || []);
+      if (data.cells) {
+        const ownerId = Number(localPlayerId.replace('player-', ''));
+        data.cells.forEach((cell) => { gameData.owners[cell] = ownerId; });
+        territoryVersion += 1;
+        updateTerritoryLayer([
+          ...previousCells.map((position) => ({ position, owner: 0 })),
+          ...data.cells.map((position) => ({ position, owner: ownerId }))
+        ]);
+      }
+      confirmedPosition = data.position;
+      selectedPosition = data.position;
+      draw();
+    },
+    rejectSpawn(data) {
+      selectionLocked = false;
+      selectedPosition = confirmedPosition;
+      spawnMessage.textContent = `SPAWN REJECTED // ${data.reason}`;
+      draw();
+    },
+    startActiveGame(data) {
+      spawnPhase = null;
+      activeGame = true;
+      selectionLocked = true;
+      clearInterval(timerHandle);
+      spawnHud.hidden = true;
+      troopDisplay.hidden = false;
+      attackRatioPanel.hidden = false;
+      updateRatioDisplay();
+      leaderboard.hidden = false;
+      spawnMessage.textContent = 'GAME ACTIVE // CAPITAL SECURED';
+      if (data.players) {
+        gameData.players = data.players;
+        data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
+        gameData.owners = Int32Array.from(data.owners || gameData.owners);
+        for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
+        rebuildTerritoryLayer();
+        const player = data.players.find((item) => item.playerId === localPlayerId);
+        localCapitalCells = new Set();
+        if (player?.capitalColor) selectedColor = player.capitalColor;
+        updateLocalTroops(player);
+        selectedPosition = player?.spawnPosition ?? null;
+      }
+      renderLeaderboard();
+      draw();
+    },
+    onMapAction(handler) {
+      mapActionHandler = handler;
+    },
+    applyGameUpdate(data) {
+      for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
+      if (data.changes?.length) territoryVersion += 1;
+      updateTerritoryLayer(data.changes);
+      for (const player of data.players || []) {
+        const current = gameData.players.find((item) => item.playerId === player.playerId);
+        if (current) Object.assign(current, player);
+        else {
+          gameData.players.push({ ...player });
+          const ownerId = Number(player.playerId.replace('player-', ''));
+          if (player.capitalColor) playerColors.set(ownerId, player.capitalColor);
+        }
+        if (player.playerId === localPlayerId) updateLocalTroops(current || player);
+      }
+      updateRatioDisplay();
+      renderLeaderboard();
+      draw();
+    },
+    rejectExpansion(data) {
+      troopDisplay.classList.remove('is-attacking');
+      spawnMessage.textContent = `EXPANSION REJECTED // ${data.reason}`;
+    }
+  };
+}());

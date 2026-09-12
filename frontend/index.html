@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#080b20">
+  <title>Terrifront</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+  <main class="home-screen">
+    <div class="map-wash" aria-hidden="true"></div>
+    <div class="map-glow" aria-hidden="true"></div>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <header class="top-bar">
+      <div class="utility-stack">
+        <div class="utility-chip"><span class="chip-dot"></span> TERRIFRONT NETWORK</div>
+        <div class="utility-chip muted">SECTOR 07 / EUROPE - ASIA</div>
+      </div>
+      <div class="clock"><span id="live-clock"></span></div>
+    </header>
+
+    <section class="hero" aria-labelledby="game-title">
+      <div class="title-lockup">
+        <span class="flag-mark" aria-hidden="true">+</span>
+        <h1 id="game-title">TERRI<span>FRONT</span></h1>
+        <span class="flag-mark" aria-hidden="true">+</span>
+      </div>
+      <p class="tagline">THE WORLD IS YOURS TO TAKE</p>
+
+      <div class="map-preview" aria-label="Live Europe Asia map preview">
+        <span>LIVE MAP</span>
+        <strong>EUROPE // ASIA</strong>
+        <small>LANDS AWAITING COMMAND</small>
+      </div>
+
+      <form class="launch-panel" id="launch-form">
+        <div class="name-row">
+          <label class="sr-only" for="player-name">Player name</label>
+          <input id="player-name" name="playerName" type="text" maxlength="24" autocomplete="nickname" spellcheck="false" required>
+          <button type="button" class="reroll-button" id="reroll-name" aria-label="Generate a new player name" title="Generate a new player name">↻</button>
+        </div>
+        <button class="play-button" type="submit">
+          <span class="button-icon" aria-hidden="true">⚔</span>
+          <span>PLAY</span>
+          <span class="button-icon" aria-hidden="true">⚔</span>
+        </button>
+        <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <footer class="footer-bar">
+      <div class="footer-meta"><span class="signal-dot"></span> BUILD 0.1.0 <span>FRONTEND PREVIEW</span></div>
+    </footer>
+  </main>
+
+  <main class="game-screen" id="game-screen" hidden>
+    <button class="quit-button" id="quit-button" type="button">QUIT</button>
+    <button class="cancel-button" id="cancel-button" hidden type="button">CANCEL x</button>
+    <div class="troop-display" id="troop-display" hidden aria-live="polite">
+      <strong><span aria-hidden="true">⚔</span> <b id="troop-count">0</b> troops</strong>
+      <span><span aria-hidden="true">▦</span> <b id="territory-count">0</b> tiles</span>
+    </div>
+    <div class="attack-ratio-panel" id="attack-ratio-panel" hidden>
+      <div class="ratio-bar-wrap">
+        <input id="power-slider" class="power-slider" type="range" min="1" max="100" value="50" step="1" aria-label="Attack ratio">
+      </div>
+      <div class="ratio-labels">
+        <span id="ratio-percent">50%</span>
+        <span id="ratio-troops">0 troops</span>
+      </div>
+    </div>
+    <div class="leaderboard" id="leaderboard" hidden aria-label="Player leaderboard"></div>
+    <div class="spawn-hud" id="spawn-hud" hidden>
+      <div class="spawn-hud-label"><span>SPAWN PHASE</span><strong id="spawn-time">30</strong></div>
+      <div class="spawn-progress"><span id="spawn-progress-bar"></span></div>
+      <p id="spawn-message">CHOOSE A LAND POSITION FOR YOUR CAPITAL</p>
+    </div>
+    <div class="map-frame">
+      <canvas id="game-canvas" aria-label="Terrifront game map"></canvas>
+    </div>
+  </main>
+
+  <script src="../shared/protocol.js"></script>
+  <script src="communicator.js"></script>
+  <script src="player-label-renderer.js"></script>
+  <script src="gameUI.js"></script>
+  <script src="index.js"></script>
+</body>
+</html>
