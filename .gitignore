@@ -11,3 +11,8 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 .vscode/
+
+# Local/reference assets not published with the project.
+warfront-reference/
+map/*
+!map/europ-asia-map.webp
