@@ -2,10 +2,23 @@ const {
   BOAT_TILES_PER_TICK,
   BOAT_DECAY_PER_TICK,
   BOAT_MIN_TROOPS,
-  BOAT_MAX_SEARCH_CELLS
+  BOAT_MAX_SEARCH_CELLS,
+  BOAT_MAX_FRONT_TILES
 } = require('../../shared/game-rules');
 
 const MAX_POWER = 1000;
+
+// Pathfinding scratch shared by every room. Searches are synchronous and never
+// interleave, and all rooms use the same map size, so one pair of buffers is
+// enough - per-room copies cost 4.6MB each for something only touched while a
+// boat is being launched. The stamp lives here too, so rooms cannot collide.
+let scratch = null;
+function getScratch(cellCount) {
+  if (!scratch || scratch.visited.length !== cellCount) {
+    scratch = { visited: new Int32Array(cellCount), parent: new Int32Array(cellCount), stamp: 0 };
+  }
+  return scratch;
+}
 
 // Ferries troops across water to a coast the player cannot reach by land.
 // A boat follows a water route tile by tile, bleeding troops the whole way, and
@@ -19,10 +32,8 @@ class BoatManager {
     this.boats = new Map();
     this.nextBoatId = 1;
 
-    // Stamped scratch buffers so a search never has to clear 600k entries.
-    this.visited = new Int32Array(map.cellCount);
-    this.parent = new Int32Array(map.cellCount);
-    this.searchId = 0;
+    // Stamped scratch so a search never has to clear 600k entries.
+    this.scratch = getScratch(map.cellCount);
   }
 
   isWater(position) {
@@ -37,9 +48,10 @@ class BoatManager {
   // to it, so clicking inland across a sea still picks a sensible beach.
   findLanding(targetPosition) {
     if (this.map.isLand(targetPosition) && this.touchesWater(targetPosition)) return targetPosition;
-    const stamp = ++this.searchId;
+    const { visited, parent } = this.scratch;
+    const stamp = ++this.scratch.stamp;
     const queue = [targetPosition];
-    this.visited[targetPosition] = stamp;
+    visited[targetPosition] = stamp;
     let head = 0;
     let explored = 0;
     while (head < queue.length && explored < 20000) {
@@ -47,9 +59,9 @@ class BoatManager {
       explored += 1;
       if (this.map.isLand(position) && this.touchesWater(position)) return position;
       for (const neighbor of this.map.getNeighbors(position)) {
-        if (this.visited[neighbor] === stamp) continue;
+        if (visited[neighbor] === stamp) continue;
         if (!this.map.isLand(neighbor)) continue;
-        this.visited[neighbor] = stamp;
+        visited[neighbor] = stamp;
         queue.push(neighbor);
       }
     }
@@ -64,14 +76,15 @@ class BoatManager {
     }
     if (goals.size === 0) return null;
 
-    const stamp = ++this.searchId;
+    const { visited, parent } = this.scratch;
+    const stamp = ++this.scratch.stamp;
     const queue = [];
     for (const border of this.territory.getBorderSet(ownerId)) {
       if (this.map.owners[border] !== ownerId) continue;
       for (const neighbor of this.map.getNeighbors(border)) {
-        if (!this.isWater(neighbor) || this.visited[neighbor] === stamp) continue;
-        this.visited[neighbor] = stamp;
-        this.parent[neighbor] = -1;
+        if (!this.isWater(neighbor) || visited[neighbor] === stamp) continue;
+        visited[neighbor] = stamp;
+        parent[neighbor] = -1;
         queue.push(neighbor);
       }
     }
@@ -84,18 +97,43 @@ class BoatManager {
       explored += 1;
       if (goals.has(position)) {
         const route = [];
-        for (let step = position; step !== -1; step = this.parent[step]) route.push(step);
+        for (let step = position; step !== -1; step = parent[step]) route.push(step);
         route.reverse();
         return route;
       }
       for (const neighbor of this.map.getNeighbors(position)) {
-        if (this.visited[neighbor] === stamp || !this.isWater(neighbor)) continue;
-        this.visited[neighbor] = stamp;
-        this.parent[neighbor] = position;
+        if (visited[neighbor] === stamp || !this.isWater(neighbor)) continue;
+        visited[neighbor] = stamp;
+        parent[neighbor] = position;
         queue.push(neighbor);
       }
     }
     return null;
+  }
+
+  // The owned tiles a landing party can attack from: the connected pocket of our
+  // territory containing the beachhead. After a sea landing that is usually just
+  // the beach itself, so the push stays local instead of firing every front we
+  // own. If the beach does touch ground we already held, that whole pocket joins.
+  frontFrom(landing, ownerId) {
+    const { visited } = this.scratch;
+    const stamp = ++this.scratch.stamp;
+    const front = [];
+    const queue = [landing];
+    visited[landing] = stamp;
+    let head = 0;
+    while (head < queue.length && front.length < BOAT_MAX_FRONT_TILES) {
+      const position = queue[head++];
+      front.push(position);
+      for (const neighbor of this.map.getNeighbors(position)) {
+        if (visited[neighbor] === stamp || this.map.owners[neighbor] !== ownerId) continue;
+        visited[neighbor] = stamp;
+        queue.push(neighbor);
+      }
+    }
+    // Hit the cap: this is a big contiguous nation, so the normal whole-border
+    // front is what we want anyway.
+    return front.length >= BOAT_MAX_FRONT_TILES ? null : front;
   }
 
   launch(playerId, power, targetPosition) {
@@ -154,11 +192,17 @@ class BoatManager {
   // Take the beach, then let the normal expansion logic carry on inland.
   land(boat) {
     const { landing, ownerId } = boat;
+    const player = this.players.get(boat.playerId);
     // A player wiped out while their boat was at sea does not get to land and
     // come back from the dead.
     if (this.territory.getTerritorySize(ownerId) === 0) return null;
     const defenderId = this.map.owners[landing];
-    if (defenderId === ownerId) return null;
+    // We took this beach by land while the boat was still crossing; bring the
+    // cargo home rather than losing it.
+    if (defenderId === ownerId) {
+      if (player) player.troops += Math.floor(boat.troops);
+      return null;
+    }
 
     const cost = this.landingCost(landing, defenderId);
     const troops = Math.floor(boat.troops);
@@ -173,7 +217,6 @@ class BoatManager {
     this.territory.registerOwner(ownerId, [landing]);
 
     const survivors = troops - cost;
-    const player = this.players.get(boat.playerId);
     if (player && survivors > 0) {
       player.troops += survivors;
       // Push inland with the landing party only. start() spends a percentage of
@@ -181,7 +224,12 @@ class BoatManager {
       // round down - a landing must never spend troops that stayed at home.
       const power = Math.floor((survivors / player.troops) * MAX_POWER);
       if (power >= 1) {
-        this.expansionManager.start(boat.playerId, power, this.inlandTarget(landing, ownerId));
+        this.expansionManager.start(
+          boat.playerId,
+          power,
+          this.inlandTarget(landing, ownerId),
+          this.frontFrom(landing, ownerId)
+        );
       }
     }
     return { position: landing, owner: ownerId };

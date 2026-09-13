@@ -10,7 +10,10 @@ class ExpansionManager {
     this.nextAttackId = 1;
   }
 
-  start(playerId, power, targetPosition = null) {
+  // `frontTiles` limits which of the player's own tiles the attack radiates
+  // from. Omitted (the normal case) it uses the whole border, so a regular
+  // attack still pushes along every front at once.
+  start(playerId, power, targetPosition = null, frontTiles = null) {
     const player = this.players.get(playerId);
     if (!player) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
     const ownerId = Number(playerId.replace('player-', ''));
@@ -31,7 +34,7 @@ class ExpansionManager {
       queued: new Set(),
       targetPosition,
       neutralMomentum: false,
-      borderTiles: new Set(this.territory.getBorderTiles(ownerId))
+      borderTiles: new Set(frontTiles || this.territory.getBorderTiles(ownerId))
     };
     const candidates = this.getAttackCandidates(attack);
     if (candidates.length === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
