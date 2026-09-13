@@ -151,7 +151,14 @@
       cachedAt = now;
     }
     const square = cachedSquares.get(Number(String(playerId).replace('player-', '')));
-    if (!square) return null;
+    if (!square) {
+      const ownerId = Number(String(playerId).replace('player-', ''));
+      for (let position = 0; position < gameData.owners.length; position += 1) {
+        if (gameData.owners[position] !== ownerId) continue;
+        return { x: position % width + 0.5, y: Math.floor(position / width) + 0.5 };
+      }
+      return null;
+    }
     return { x: square.x + square.size / 2, y: square.y + square.size / 2 };
   }
 
