@@ -10,7 +10,8 @@
   const quitButton = document.querySelector('#quit-button');
   const liveClock = document.querySelector('#live-clock');
   const powerSlider = document.querySelector('#power-slider');
-  const CODES = window.TerriProtocolCodes;
+  const PROTOCOL = window.TerriBinaryProtocol;
+  const OP = PROTOCOL.OP;
 
   const namePool = ['River Fox', 'Iron Finch', 'Neon Atlas', 'Moss Runner'];
 
@@ -41,51 +42,52 @@
   updateClock();
   setInterval(updateClock, 1000);
 
-  TerriCommunicator.on(CODES.GAME_ACCEPTED, function (message) {
+  TerriCommunicator.on(OP.GAME_ACCEPTED, function (message) {
     homeScreen.hidden = true;
     gameScreen.hidden = false;
     TerriGameUI.start(message.payload);
   });
 
-  TerriCommunicator.on(CODES.GAME_REJECTED, function (message) {
+  TerriCommunicator.on(OP.GAME_REJECTED, function (message) {
     status.textContent = `REQUEST REJECTED // ${message.payload.reason}`;
   });
 
-  TerriCommunicator.on(CODES.SPAWN_PHASE_STARTED, function (message) {
+  TerriCommunicator.on(OP.SPAWN_PHASE_STARTED, function (message) {
     TerriGameUI.beginSpawnPhase(message.payload);
   });
 
-  TerriCommunicator.on(CODES.SPAWN_CONFIRMED, function (message) {
+  TerriCommunicator.on(OP.SPAWN_CONFIRMED, function (message) {
     TerriGameUI.confirmSpawn(message.payload);
   });
 
-  TerriCommunicator.on(CODES.SPAWN_REJECTED, function (message) {
+  TerriCommunicator.on(OP.SPAWN_REJECTED, function (message) {
     TerriGameUI.rejectSpawn(message.payload);
   });
 
-  TerriCommunicator.on(CODES.GAME_STARTED, function (message) {
+  TerriCommunicator.on(OP.GAME_STARTED, function (message) {
     TerriGameUI.startActiveGame(message.payload);
   });
 
-  TerriCommunicator.on(CODES.GAME_UPDATE, function (message) {
+  TerriCommunicator.on(OP.GAME_UPDATE, function (message) {
     TerriGameUI.applyGameUpdate(message.payload);
   });
 
-  TerriCommunicator.on(CODES.EXPANSION_REJECTED, function (message) {
+  TerriCommunicator.on(OP.EXPANSION_REJECTED, function (message) {
     TerriGameUI.rejectExpansion(message.payload);
   });
 
   TerriGameUI.onSpawnSubmit(function (payload) {
-    TerriCommunicator.send(CODES.SPAWN_POSITION_SUBMITTED, payload);
+    TerriCommunicator.send(PROTOCOL.encodeSpawnPosition(payload.playerId, payload.position));
   });
 
   TerriGameUI.onMapAction(function (payload) {
     const power = Math.round(Number(powerSlider.value) * 10);
-    TerriCommunicator.send(CODES.EXPANSION_REQUEST, { ...payload, power });
+    TerriCommunicator.send(PROTOCOL.encodeExpansionRequest(payload.playerId, payload.position, power));
   });
 
   quitButton.addEventListener('click', function () {
     TerriCommunicator.socket?.close();
+    TerriGameUI.stop();
     gameScreen.hidden = true;
     homeScreen.hidden = false;
     status.textContent = '';
@@ -104,7 +106,7 @@
     status.textContent = 'CONNECTING TO GAME SERVER...';
     TerriCommunicator.connect()
       .then(() => {
-        if (!TerriCommunicator.send(CODES.REQUEST_GAME, { playerName })) {
+        if (!TerriCommunicator.send(PROTOCOL.encodeRequestGame(playerName))) {
           status.textContent = 'GAME SERVER CONNECTION FAILED.';
         }
       })

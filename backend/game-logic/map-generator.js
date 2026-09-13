@@ -38,6 +38,7 @@ function cloneMap(source) {
 function createMap(sourceTerrain, width, height, sourceExpansionTimes) {
   const cellCount = width * height;
   const terrain = Uint8Array.from(sourceTerrain);
+  const conquerableTerrainCount = terrain.reduce((count, value) => count + ((value & TERRAIN_LAND) !== 0 ? 1 : 0), 0);
   const owners = new Int32Array(cellCount);
   const expansionTimes = sourceExpansionTimes
     ? Uint8Array.from(sourceExpansionTimes)
@@ -48,6 +49,7 @@ function createMap(sourceTerrain, width, height, sourceExpansionTimes) {
     width,
     height,
     cellCount,
+    conquerableTerrainCount,
     backgroundAsset: 'map/europ-asia-map.webp',
     terrain,
     owners,

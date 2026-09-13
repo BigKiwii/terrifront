@@ -4,6 +4,7 @@ class TerritoryManager {
     this.borderTiles = new Map();
     this.borderSets = new Map();
     this.territorySizes = new Map();
+    this.eliminationBases = new Map();
     this.tileGrades = new Uint8Array(map.cellCount);
     this.gradesInitialized = false;
   }
@@ -61,7 +62,9 @@ class TerritoryManager {
       for (const neighbor of this.map.getNeighbors(position)) this.refreshBorder(neighbor, ownerId);
     }
     this.borderSets.set(ownerId, borders);
-    this.territorySizes.set(ownerId, (this.territorySizes.get(ownerId) ?? 0) + cells.length);
+    const territorySize = (this.territorySizes.get(ownerId) ?? 0) + cells.length;
+    this.territorySizes.set(ownerId, territorySize);
+    this.eliminationBases.set(ownerId, Math.max(this.eliminationBases.get(ownerId) ?? 0, territorySize));
   }
 
   removeOwnerCells(ownerId, cells) {
@@ -219,7 +222,9 @@ class TerritoryManager {
       }
     }
     this.map.owners[position] = attackerId;
-    this.territorySizes.set(attackerId, (this.territorySizes.get(attackerId) ?? 0) + 1);
+    const attackerTerritorySize = (this.territorySizes.get(attackerId) ?? 0) + 1;
+    this.territorySizes.set(attackerId, attackerTerritorySize);
+    this.eliminationBases.set(attackerId, Math.max(this.eliminationBases.get(attackerId) ?? 0, attackerTerritorySize));
     for (const affectedPosition of [position, ...this.map.getNeighbors(position)]) {
       this.updateTileGrade(affectedPosition);
     }
@@ -235,7 +240,39 @@ class TerritoryManager {
     for (const affectedOwner of affectedOwners) {
       this.updateBorderOnClaim(position, affectedOwner);
     }
-    return { success: true, attackerLoss };
+    let eliminatedOwnerId = 0;
+    let releasedPositions = [];
+    if (defenderId !== 0 && this.shouldEliminate(defenderId)) {
+      eliminatedOwnerId = defenderId;
+      releasedPositions = this.releaseOwner(defenderId);
+      const defender = players.get(`player-${defenderId}`);
+      if (defender) defender.troops = 0;
+    }
+    return { success: true, attackerLoss, eliminatedOwnerId, releasedPositions };
+  }
+
+  shouldEliminate(ownerId) {
+    const baseSize = this.eliminationBases.get(ownerId) ?? 0;
+    const currentSize = this.getTerritorySize(ownerId);
+    return baseSize > 0 && currentSize > 0 && currentSize <= baseSize * 0.15;
+  }
+
+  releaseOwner(ownerId) {
+    const releasedPositions = [];
+    for (let position = 0; position < this.map.cellCount; position += 1) {
+      if (this.map.owners[position] !== ownerId) continue;
+      this.map.owners[position] = 0;
+      releasedPositions.push(position);
+    }
+    for (const position of releasedPositions) {
+      for (const affectedPosition of [position, ...this.map.getNeighbors(position)]) {
+        this.updateTileGrade(affectedPosition);
+      }
+    }
+    this.territorySizes.set(ownerId, 0);
+    this.borderTiles.delete(ownerId);
+    this.borderSets.delete(ownerId);
+    return releasedPositions;
   }
 
   updateBorderOnClaim(position, ownerId) {

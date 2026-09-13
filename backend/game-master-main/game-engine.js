@@ -22,6 +22,7 @@ class GameEngine {
     this.tickCount = 0;
     this.economyTickCount = 0;
     this.activeSince = null;
+    this.winnerId = null;
   }
 
   async addPlayer(playerName, playerId = `player-${this.players.size + 1}`, isBot = false) {
@@ -130,9 +131,11 @@ class GameEngine {
 
   tick(now = Date.now()) {
     if (this.phase !== 'ACTIVE') return null;
+    if (this.winnerId) return null;
     this.tickCount += 1;
     this.botManager?.tick(this.tickCount);
     const changes = this.expansionManager.tick();
+    this.updateWinner();
     const economyTick = this.tickCount % ECONOMY_TICKS_PER_SECOND === 0;
     if (economyTick) {
       this.economyTickCount += 1;
@@ -144,6 +147,7 @@ class GameEngine {
 
   requestExpansion(playerId, position, power = 1000) {
     if (this.phase !== 'ACTIVE') return { accepted: false, reason: 'GAME_NOT_ACTIVE' };
+    if (this.winnerId) return { accepted: false, reason: 'GAME_FINISHED' };
     if (!Number.isInteger(position) || position < 0 || position >= this.map.cellCount) return { accepted: false, reason: 'INVALID_POSITION' };
     if (!this.map.isLand(position)) return { accepted: false, reason: 'NOT_LAND' };
     const ownerId = Number(playerId.replace('player-', ''));
@@ -171,6 +175,18 @@ class GameEngine {
     }
   }
 
+  updateWinner() {
+    if (this.winnerId) return;
+    const targetSize = this.map.conquerableTerrainCount * 0.85;
+    for (const player of this.players.values()) {
+      const ownerId = Number(player.playerId.replace('player-', ''));
+      if (this.territoryManager.getTerritorySize(ownerId) < targetSize) continue;
+      this.winnerId = player.playerId;
+      this.expansionManager.stopAllAttacks();
+      return;
+    }
+  }
+
   getState() {
     return {
       gameId: this.gameId,
@@ -184,10 +200,12 @@ class GameEngine {
         spawnPosition: player.spawnPosition,
         capitalColor: player.capitalColor,
         isBot: player.isBot,
+        isWinner: player.playerId === this.winnerId,
         isAlive: this.territoryManager.getTerritorySize(Number(player.playerId.replace('player-', ''))) > 0
       })),
       owners: [...this.map.owners],
       tickCount: this.tickCount,
+      winnerId: this.winnerId,
     };
   }
 
@@ -203,10 +221,12 @@ class GameEngine {
         territorySize: this.territoryManager.getTerritorySize(Number(player.playerId.replace('player-', ''))),
         expansionActive: this.expansionManager.isActive(player.playerId),
         isBot: player.isBot,
+        isWinner: player.playerId === this.winnerId,
         spawnPosition: player.spawnPosition,
         capitalColor: player.capitalColor,
         isAlive: this.territoryManager.getTerritorySize(Number(player.playerId.replace('player-', ''))) > 0
-      }))
+      })),
+      winnerId: this.winnerId
     };
   }
 }

@@ -2,7 +2,16 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const WebSocket = require('ws');
-const { CODES, createMessage } = require('../shared/protocol');
+const {
+  OP,
+  encodeGameAccepted,
+  encodeSpawnPhaseStarted,
+  encodeSpawnConfirmed,
+  encodeRejected,
+  encodeGameStarted,
+  encodeGameUpdate,
+  decodeClientMessage
+} = require('../shared/binary-protocol');
 const GameMaster = require('./game-master-main/game-master');
 
 const port = Number(process.env.PORT || 8080);
@@ -38,59 +47,51 @@ server.on('connection', (socket) => {
   console.log(`[${new Date().toISOString()}] CLIENT_CONNECTED ${clientAddress}`);
 
   socket.on('message', async (rawMessage) => {
-    const rawText = rawMessage.toString();
-    console.log(`[${new Date().toISOString()}] REQUEST from=${clientAddress} raw=${rawText}`);
-
     let message;
     try {
-      message = JSON.parse(rawText);
+      message = decodeClientMessage(rawMessage);
     } catch {
-      console.log(`[${new Date().toISOString()}] REQUEST_REJECTED reason=INVALID_JSON`);
-      socket.send(JSON.stringify(createMessage(CODES.GAME_REJECTED, null, { reason: 'INVALID_JSON' })));
+      console.log(`[${new Date().toISOString()}] REQUEST_REJECTED reason=INVALID_BINARY_MESSAGE`);
+      socket.send(encodeRejected(OP.GAME_REJECTED, 'INVALID_JSON'));
       return;
     }
 
-    if (message.code === CODES.EXPANSION_REQUEST) {
-      const playerId = message.payload?.playerId;
-      const result = gameMaster.requestExpansion(playerId, message.payload?.position, message.payload?.power);
+    if (message.opcode === OP.EXPANSION_REQUEST) {
+      const result = gameMaster.requestExpansion(message.playerId, message.position, message.power);
       if (!result.accepted) {
-        socket.send(JSON.stringify(createMessage(CODES.EXPANSION_REJECTED, message.requestId, result || { reason: 'PLAYER_NOT_FOUND' })));
+        socket.send(encodeRejected(OP.EXPANSION_REJECTED, result.reason));
         return;
       }
-      const player = gameMaster.players.get(playerId);
-      socket.send(JSON.stringify(createMessage(CODES.GAME_UPDATE, message.requestId, {
-        ...result,
-        ...(player.engine.getTickState([]))
-      })));
+      const player = gameMaster.players.get(message.playerId);
+      socket.send(encodeGameUpdate(player.engine.getTickState([])));
       return;
     }
 
-    if (message.code === CODES.CANCEL_EXPANSION) {
-      const playerId = message.payload?.playerId;
-      const player = gameMaster.players.get(playerId);
-      if (player) player.engine.cancelExpansion(playerId);
+    if (message.opcode === OP.CANCEL_EXPANSION) {
+      const player = gameMaster.players.get(message.playerId);
+      if (player) player.engine.cancelExpansion(message.playerId);
       return;
     }
 
-    if (message.code === CODES.SPAWN_POSITION_SUBMITTED) {
-      const playerId = message.payload?.playerId;
-      const result = gameMaster.submitSpawn(playerId, message.payload?.position);
-      const responseCode = result.accepted ? CODES.SPAWN_CONFIRMED : CODES.SPAWN_REJECTED;
-      console.log(`[${new Date().toISOString()}] SPAWN_${result.accepted ? 'ACCEPTED' : 'REJECTED'} playerId=${playerId ?? 'missing'} position=${message.payload?.position ?? 'missing'} reason=${result.reason ?? 'none'}`);
-      socket.send(JSON.stringify(createMessage(responseCode, message.requestId, result)));
+    if (message.opcode === OP.SPAWN_POSITION) {
+      const result = gameMaster.submitSpawn(message.playerId, message.position);
+      console.log(`[${new Date().toISOString()}] SPAWN_${result.accepted ? 'ACCEPTED' : 'REJECTED'} playerId=${message.playerId} position=${message.position} reason=${result.reason ?? 'none'}`);
+      socket.send(result.accepted
+        ? encodeSpawnConfirmed(result)
+        : encodeRejected(OP.SPAWN_REJECTED, result.reason));
       return;
     }
 
-    if (message.code !== CODES.REQUEST_GAME || typeof message.payload?.playerName !== 'string') {
-      console.log(`[${new Date().toISOString()}] REQUEST_REJECTED code=${message.code ?? 'missing'} requestId=${message.requestId ?? 'missing'} reason=INVALID_GAME_REQUEST`);
-      socket.send(JSON.stringify(createMessage(CODES.GAME_REJECTED, message.requestId, { reason: 'INVALID_GAME_REQUEST' })));
+    if (message.opcode !== OP.REQUEST_GAME || typeof message.playerName !== 'string') {
+      console.log(`[${new Date().toISOString()}] REQUEST_REJECTED reason=INVALID_GAME_REQUEST`);
+      socket.send(encodeRejected(OP.GAME_REJECTED, 'INVALID_GAME_REQUEST'));
       return;
     }
 
-    const playerName = message.payload.playerName.trim().slice(0, 24);
+    const playerName = message.playerName.trim().slice(0, 24);
     if (!playerName) {
-      console.log(`[${new Date().toISOString()}] REQUEST_REJECTED code=${message.code} requestId=${message.requestId ?? 'missing'} reason=INVALID_PLAYER_NAME`);
-      socket.send(JSON.stringify(createMessage(CODES.GAME_REJECTED, message.requestId, { reason: 'INVALID_PLAYER_NAME' })));
+      console.log(`[${new Date().toISOString()}] REQUEST_REJECTED reason=INVALID_PLAYER_NAME`);
+      socket.send(encodeRejected(OP.GAME_REJECTED, 'INVALID_PLAYER_NAME'));
       return;
     }
 
@@ -99,20 +100,20 @@ server.on('connection', (socket) => {
       gameData = await gameMaster.requestGame(playerName);
     } catch (error) {
       console.error(`[${new Date().toISOString()}] REQUEST_FAILED reason=${error.message}`);
-      socket.send(JSON.stringify(createMessage(CODES.GAME_REJECTED, message.requestId, { reason: 'MAP_LOAD_FAILED' })));
+      socket.send(encodeRejected(OP.GAME_REJECTED, 'MAP_LOAD_FAILED'));
       return;
     }
     const { game, spawnPhase } = gameData;
     gameSockets.set(game.gameId, socket);
     socket.gameId = game.gameId;
-    console.log(`[${new Date().toISOString()}] REQUEST_ACCEPTED code=${message.code} requestId=${message.requestId ?? 'missing'} playerName=${playerName} gameId=${game.gameId}`);
-    socket.send(JSON.stringify(createMessage(CODES.GAME_ACCEPTED, message.requestId, game)));
-    socket.send(JSON.stringify(createMessage(CODES.SPAWN_PHASE_STARTED, message.requestId, { ...spawnPhase, playerId: game.playerId })));
+    console.log(`[${new Date().toISOString()}] REQUEST_ACCEPTED playerName=${playerName} gameId=${game.gameId}`);
+    socket.send(encodeGameAccepted(game));
+    socket.send(encodeSpawnPhaseStarted(game.playerId, spawnPhase));
     setTimeout(async () => {
       gameMaster.finalizeGame(game.gameId);
       const state = await gameMaster.populateBots(game.gameId);
       if (state && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(createMessage(CODES.GAME_STARTED, message.requestId, state)));
+        socket.send(encodeGameStarted(state));
       }
     }, spawnPhase.durationMs);
   });
@@ -125,7 +126,7 @@ server.on('connection', (socket) => {
 
 gameMaster.startTicker((update) => {
     const socket = gameSockets.get(update.gameId);
-    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(createMessage(CODES.GAME_UPDATE, null, update)));
+  if (socket?.readyState === WebSocket.OPEN) socket.send(encodeGameUpdate(update));
 });
 
 staticServer.listen(port, () => {

@@ -7,6 +7,7 @@ class ExpansionManager {
     this.territory = territory;
     this.players = players;
     this.attacks = new Map();
+    this.nextAttackId = 1;
   }
 
   start(playerId, power, targetPosition = null) {
@@ -18,18 +19,8 @@ class ExpansionManager {
     if (troops < 1) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
 
     const targetOwnerId = targetPosition === null ? 0 : this.map.owners[targetPosition] || 0;
-    const existing = this.attacks.get(playerId);
-    if (existing) {
-      player.troops = Math.max(0, player.troops - troops);
-      existing.troops += troops;
-      if (targetPosition !== null) {
-        existing.targetPosition = targetPosition;
-        existing.targetOwnerId = targetOwnerId;
-      }
-      return { accepted: true, playerId, troops, power: normalizedPower };
-    }
-
     const attack = {
+      id: this.nextAttackId++,
       playerId,
       ownerId,
       targetOwnerId,
@@ -39,13 +30,14 @@ class ExpansionManager {
       scheduledTiles: 0,
       queued: new Set(),
       targetPosition,
+      neutralMomentum: false,
       borderTiles: new Set(this.territory.getBorderTiles(ownerId))
     };
     const candidates = this.getAttackCandidates(attack);
     if (candidates.length === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
 
     player.troops = Math.max(0, player.troops - troops);
-    this.attacks.set(playerId, attack);
+    this.attacks.set(attack.id, attack);
     this.scheduleCandidates(attack, candidates);
     return { accepted: true, playerId, troops, power: normalizedPower };
   }
@@ -66,7 +58,17 @@ class ExpansionManager {
         if (!result.success || attack.troops < result.attackerLoss) continue;
         attack.troops -= result.attackerLoss;
         changes.push({ position, owner: attack.ownerId });
+        for (const releasedPosition of result.releasedPositions || []) {
+          changes.push({ position: releasedPosition, owner: 0 });
+        }
         this.refreshAttackBorder(attack, position);
+        if (result.eliminatedOwnerId) {
+          attack.targetOwnerId = 0;
+          attack.targetPosition = null;
+          attack.neutralMomentum = true;
+          this.requeueNeutralFrontier(attack, result.releasedPositions || []);
+          this.cancelEliminatedPlayer(result.eliminatedOwnerId);
+        }
         const frontier = this.map.getNeighbors(position)
           .filter((neighbor) => this.isTargetTile(neighbor, attack) && !attack.queued.has(neighbor));
         this.scheduleCandidates(attack, frontier);
@@ -76,6 +78,36 @@ class ExpansionManager {
       if (attack.troops <= 0 || attack.scheduledTiles <= 0) this.finishAttack(attack);
     }
     return changes;
+  }
+
+  cancelEliminatedPlayer(ownerId) {
+    for (const [attackId, attack] of this.attacks) {
+      if (attack.ownerId !== ownerId) continue;
+      this.attacks.delete(attackId);
+    }
+    const player = this.players.get(`player-${ownerId}`);
+    if (player) player.troops = 0;
+  }
+
+  stopAllAttacks() {
+    for (const attack of this.attacks.values()) {
+      const player = this.players.get(attack.playerId);
+      if (player && attack.troops > 0) player.troops += attack.troops;
+    }
+    this.attacks.clear();
+  }
+
+  requeueNeutralFrontier(attack, releasedPositions) {
+    const released = new Set(releasedPositions);
+    for (const queue of attack.tileQueue) {
+      for (let index = queue.length - 1; index >= 0; index -= 1) {
+        if (!released.has(queue[index])) continue;
+        queue.splice(index, 1);
+        attack.scheduledTiles -= 1;
+      }
+    }
+    for (const position of released) attack.queued.delete(position);
+    this.scheduleCandidates(attack, this.getAttackCandidates(attack));
   }
 
   isTargetTile(position, attack) {
@@ -102,7 +134,8 @@ class ExpansionManager {
         .filter((neighbor) => this.map.owners[neighbor] === attack.ownerId).length;
       const expansionTime = this.map.expansionTimes?.[position] || 50;
       const jitter = Math.random() * 0.06;
-      const delayTicks = Math.max(1, Math.floor(expansionTime * (0.08 - 0.02 * Math.min(3, contacts) + jitter) * speedFactor));
+      const momentum = attack.neutralMomentum ? 0.6 : 1;
+      const delayTicks = Math.max(1, Math.floor(expansionTime * (0.08 - 0.02 * Math.min(3, contacts) + jitter) * speedFactor * momentum));
       const slot = (attack.queueSlot + delayTicks) % MAX_SCHEDULE_TICKS;
       attack.tileQueue[slot].push(position);
       attack.scheduledTiles += 1;
@@ -134,16 +167,25 @@ class ExpansionManager {
   finishAttack(attack) {
     const player = this.players.get(attack.playerId);
     if (player && attack.troops > 0) player.troops += attack.troops;
-    this.attacks.delete(attack.playerId);
+    this.attacks.delete(attack.id);
   }
 
   cancel(playerId) {
-    const attack = this.attacks.get(playerId);
-    if (attack) this.finishAttack(attack);
+    for (const attack of [...this.attacks.values()]) {
+      if (attack.playerId === playerId) this.finishAttack(attack);
+    }
   }
 
   isActive(playerId) {
-    return this.attacks.has(playerId);
+    return this.getActiveCount(playerId) > 0;
+  }
+
+  getActiveCount(playerId) {
+    let count = 0;
+    for (const attack of this.attacks.values()) {
+      if (attack.playerId === playerId) count += 1;
+    }
+    return count;
   }
 }
 

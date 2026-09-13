@@ -139,7 +139,7 @@ h1 span { color: var(--cyan); }
 
 .game-screen { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; background: #8a8a8a; }
 .game-screen[hidden] { display: none; }
-.quit-button { position: absolute; z-index: 8; top: 14px; left: 14px; border: 1px solid rgba(244, 243, 234, 0.55); padding: 6px 9px; color: var(--muted); background: rgba(7, 18, 33, 0.88); font-family: var(--data-font); font-size: 9px; letter-spacing: 0.1em; cursor: pointer; }
+.quit-button { position: absolute; z-index: 8; top: 14px; right: 14px; border: 1px solid rgba(244, 243, 234, 0.55); padding: 6px 9px; color: var(--muted); background: rgba(7, 18, 33, 0.88); font-family: var(--data-font); font-size: 9px; letter-spacing: 0.1em; cursor: pointer; }
 .quit-button:hover { color: var(--paper); border-color: var(--paper); background: rgba(40, 25, 34, 0.94); }
 .quit-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 .cancel-button { position: absolute; z-index: 7; bottom: 70px; left: 50%; transform: translateX(-50%); border: 1px solid #e63946; padding: 5px 16px; color: #e63946; background: rgba(7, 18, 33, 0.9); font-family: var(--data-font); font-size: 9px; letter-spacing: 0.1em; cursor: pointer; }
@@ -148,10 +148,13 @@ h1 span { color: var(--cyan); }
 .troop-display strong { color: var(--cyan); font-size: 16px; }
 .troop-display.is-attacking { border-color: #e63946; animation: attack-pulse 0.8s ease-in-out infinite alternate; }
 .troop-display span span { color: var(--paper); }
-.leaderboard { position: absolute; top: 14px; right: 14px; z-index: 6; width: 210px; border: 1px solid rgba(244,243,234,0.4); color: var(--paper); background: rgba(7,18,33,0.88); font-family: var(--data-font); font-size: 11px; }
+.leaderboard { position: absolute; top: 14px; left: 14px; z-index: 6; width: 210px; border: 1px solid rgba(244,243,234,0.4); color: var(--paper); background: rgba(7,18,33,0.88); font-family: var(--data-font); font-size: 11px; }
 .leaderboard[hidden] { display: none; }
 .leaderboard-title { padding: 7px 10px; color: var(--cyan); border-bottom: 1px solid rgba(255,255,255,0.2); letter-spacing: 0.1em; }
-.leaderboard-row { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.leaderboard-list { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--cyan) rgba(255,255,255,0.1); scrollbar-width: thin; }
+.leaderboard-row { display: flex; height: 36px; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.leaderboard-row { cursor: pointer; }
+.leaderboard-row:hover, .leaderboard-row:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; background: rgba(103,212,220,0.12); }
 .leaderboard-row.is-local { color: var(--cyan); background: rgba(103,212,220,0.1); }
 .leaderboard-row.is-bot { opacity: 0.65; }
 .leaderboard-row.is-eliminated { opacity: 0.3; text-decoration: line-through; }
@@ -174,7 +177,7 @@ h1 span { color: var(--cyan); }
 
 @media (max-width: 700px) {
   .map-frame { width: min(88vw, 620px); }
-  .leaderboard { top: auto; right: 10px; bottom: 10px; width: 190px; }
+  .leaderboard { top: auto; bottom: 10px; left: 10px; width: 190px; }
 }
 
 .attack-ratio-panel { position: absolute; z-index: 6; bottom: 24px; left: 50%; width: min(280px, 72vw); transform: translateX(-50%); padding: 8px 14px 10px; border: 1px solid rgba(244, 243, 234, 0.4); background: rgba(7, 18, 33, 0.88); font-family: var(--data-font); }

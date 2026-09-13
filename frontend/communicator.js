@@ -8,6 +8,7 @@
       if (this.socket) return Promise.resolve(this.socket);
       return new Promise((resolve, reject) => {
         const socket = new WebSocket(url);
+        socket.binaryType = 'arraybuffer';
         this.socket = socket;
         socket.addEventListener('open', () => resolve(socket));
         socket.addEventListener('message', (event) => this.receive(event.data));
@@ -15,19 +16,22 @@
         socket.addEventListener('close', () => { this.socket = null; });
       });
     },
-    send(code, payload) {
+    send(buffer) {
       if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return false;
-      const requestId = `request-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-      this.socket.send(JSON.stringify({ code, requestId, payload }));
-      return requestId;
+      this.socket.send(buffer);
+      return true;
     },
-    on(code, handler) {
-      this.messageHandlers.set(code, handler);
+    on(opcode, handler) {
+      this.messageHandlers.set(opcode, handler);
     },
     receive(rawMessage) {
-      const message = JSON.parse(rawMessage);
-      const handler = this.messageHandlers.get(message.code);
-      if (handler) handler(message);
+      try {
+        const message = window.TerriBinaryProtocol.decodeServerMessage(rawMessage);
+        const handler = this.messageHandlers.get(message.opcode);
+        if (handler) handler(message);
+      } catch (error) {
+        console.error('Unable to decode server message:', error);
+      }
     }
   };
 

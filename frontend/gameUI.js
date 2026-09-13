@@ -22,6 +22,7 @@
   const territoryCanvas = document.createElement('canvas');
   const territoryContext = territoryCanvas.getContext('2d');
   const renderScale = 1;
+  TerriPlayerLabelRenderer.init(document.querySelector('#game-screen'), canvas);
   let gameData = null;
   let zoom = 1;
   let panX = 0;
@@ -34,6 +35,7 @@
   let spawnSubmitHandler = null;
   let timerHandle = null;
   let terrain = null;
+  let expansionTimes = null;
   let spawnPoints = new Set();
   let selectionLocked = false;
   let localPlayerId = null;
@@ -46,9 +48,29 @@
   let confirmedPosition = null;
   let currentPower = 500;
   let territoryVersion = 0;
+  let eliminationAnimationFrame = null;
+  let localPlayerEliminated = false;
+  let localPlayerWon = false;
+  const TROOP_SMOOTHING_MS = 90;
+  const LEADERBOARD_INTERVAL_MS = 250;
+  let pendingChanges = [];
+  let pendingHead = 0;
+  let drainRate = 0;
+  let drainCarry = 0;
+  let packetIntervalMs = 100;
+  let lastPacketAt = 0;
+  let renderLoopRunning = false;
+  let lastFrameAt = 0;
+  let displayTroops = 0;
+  let targetTroops = 0;
+  let leaderboardAt = 0;
 
   function clamp(value, minimum, maximum) {
     return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  function formatTroops(value) {
+    return Math.round(Number(value) || 0).toLocaleString('en-US').replace(/,/g, ' ');
   }
 
   function updatePowerSlider() {
@@ -66,7 +88,82 @@
     ratioPercent.textContent = `${percentage}%`;
     const localPlayer = gameData?.players?.find((player) => player.playerId === localPlayerId);
     const troops = Math.floor((localPlayer?.troops || 0) * percentage / 100);
-    ratioTroops.textContent = `${troops.toLocaleString()} troops`;
+    ratioTroops.textContent = `${formatTroops(troops)} troops`;
+  }
+
+  function resetInterpolation() {
+    pendingChanges = [];
+    pendingHead = 0;
+    drainRate = 0;
+    drainCarry = 0;
+    packetIntervalMs = 100;
+    lastPacketAt = 0;
+  }
+
+  function queueChanges(changes) {
+    if (!changes?.length) return;
+    pendingChanges.push(...changes);
+    const remaining = pendingChanges.length - pendingHead;
+    drainRate = remaining / Math.max(16, packetIntervalMs);
+    drainCarry = 0;
+  }
+
+  function drainPendingChanges(deltaMs) {
+    const remaining = pendingChanges.length - pendingHead;
+    if (remaining === 0) return;
+    drainCarry += drainRate * deltaMs;
+    let budget = Math.floor(drainCarry);
+    if (budget < 1) return;
+    drainCarry -= budget;
+    if (remaining <= budget + 1) budget = remaining;
+
+    const applied = [];
+    while (pendingHead < pendingChanges.length && budget > 0) {
+      const change = pendingChanges[pendingHead++];
+      gameData.owners[change.position] = change.owner;
+      applied.push(change);
+      budget -= 1;
+    }
+    if (pendingHead >= pendingChanges.length) {
+      pendingChanges = [];
+      pendingHead = 0;
+    } else if (pendingHead > 4096) {
+      pendingChanges = pendingChanges.slice(pendingHead);
+      pendingHead = 0;
+    }
+    if (applied.length) {
+      updateTerritoryLayer(applied);
+      territoryVersion += 1;
+    }
+  }
+
+  function smoothTroops(deltaMs) {
+    const alpha = 1 - Math.exp(-deltaMs / TROOP_SMOOTHING_MS);
+    displayTroops += (targetTroops - displayTroops) * alpha;
+    if (Math.abs(targetTroops - displayTroops) < 0.5) displayTroops = targetTroops;
+    troopCount.textContent = formatTroops(displayTroops);
+  }
+
+  function renderFrame(timestamp) {
+    if (!renderLoopRunning) return;
+    const deltaMs = lastFrameAt ? Math.min(200, timestamp - lastFrameAt) : 16;
+    lastFrameAt = timestamp;
+    drainPendingChanges(deltaMs);
+    smoothTroops(deltaMs);
+    draw();
+    requestAnimationFrame(renderFrame);
+  }
+
+  function startRenderLoop() {
+    if (renderLoopRunning) return;
+    renderLoopRunning = true;
+    lastFrameAt = 0;
+    requestAnimationFrame(renderFrame);
+  }
+
+  function stopRenderLoop() {
+    renderLoopRunning = false;
+    resetInterpolation();
   }
 
   function applyMapTransform() {
@@ -82,6 +179,76 @@
     panX = 0;
     panY = 0;
     applyMapTransform();
+  }
+
+  function animateMapToCenter() {
+    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+    dragStart = null;
+    dragMoved = false;
+    const startZoom = zoom;
+    const startPanX = panX;
+    const startPanY = panY;
+    const startedAt = performance.now();
+    const duration = 2800;
+
+    function step(now) {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      zoom = startZoom + (1 - startZoom) * eased;
+      panX = startPanX * (1 - eased);
+      panY = startPanY * (1 - eased);
+      applyMapTransform();
+      if (progress < 1) {
+        eliminationAnimationFrame = requestAnimationFrame(step);
+      } else {
+        eliminationAnimationFrame = null;
+        resetMapTransform();
+      }
+    }
+
+    eliminationAnimationFrame = requestAnimationFrame(step);
+  }
+
+  function focusPlayer(playerId) {
+    if (!gameData || eliminationAnimationFrame) return;
+    const target = TerriPlayerLabelRenderer.getLabelCenter(playerId, gameData, territoryVersion);
+    if (!target) return;
+    const mapWidth = gameData.map.width;
+    const mapHeight = gameData.map.height;
+    const targetZoom = clamp(Math.max(zoom, 2.2), 1, 8);
+    const viewportCenterX = window.innerWidth / 2;
+    const viewportCenterY = window.innerHeight / 2;
+    const currentBounds = mapFrame.getBoundingClientRect();
+    const targetScreenX = currentBounds.left + target.x / mapWidth * currentBounds.width;
+    const targetScreenY = currentBounds.top + target.y / mapHeight * currentBounds.height;
+    const zoomRatio = targetZoom / zoom;
+    const scaledTargetX = viewportCenterX + (targetScreenX - viewportCenterX) * zoomRatio;
+    const scaledTargetY = viewportCenterY + (targetScreenY - viewportCenterY) * zoomRatio;
+    const targetPanX = panX + viewportCenterX - scaledTargetX;
+    const targetPanY = panY + viewportCenterY - scaledTargetY;
+    const startZoom = zoom;
+    const startPanX = panX;
+    const startPanY = panY;
+    const startedAt = performance.now();
+    const duration = 650;
+    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+
+    function step(now) {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      zoom = startZoom + (targetZoom - startZoom) * eased;
+      panX = startPanX + (targetPanX - startPanX) * eased;
+      panY = startPanY + (targetPanY - startPanY) * eased;
+      applyMapTransform();
+      if (progress < 1) eliminationAnimationFrame = requestAnimationFrame(step);
+      else eliminationAnimationFrame = null;
+    }
+
+    eliminationAnimationFrame = requestAnimationFrame(step);
   }
 
   function resizeCanvas() {
@@ -143,7 +310,20 @@
     for (let index = 0; index < binary.length; index += 1) terrain[index] = binary.charCodeAt(index);
   }
 
+  function decodeEmbeddedBytes(encoded) {
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  }
+
   async function loadTerrain(mapData) {
+    if (window.TerriEmbeddedTerrain) {
+      terrain = decodeEmbeddedBytes(window.TerriEmbeddedTerrain);
+      buildTerrainLayer();
+      draw();
+      return;
+    }
     const terrainUrl = window.location.protocol === 'file:'
       ? `http://localhost:8080${mapData.terrainUrl}`
       : new URL(mapData.terrainUrl, window.location.href).href;
@@ -152,6 +332,20 @@
     terrain = new Uint8Array(await response.arrayBuffer());
     buildTerrainLayer();
     draw();
+  }
+
+  async function loadExpansionTimes(mapData) {
+    if (!mapData.expansionTimesUrl) return;
+    if (window.TerriEmbeddedExpansionTimes) {
+      expansionTimes = decodeEmbeddedBytes(window.TerriEmbeddedExpansionTimes);
+      return;
+    }
+    const expansionTimesUrl = window.location.protocol === 'file:'
+      ? `http://localhost:8080${mapData.expansionTimesUrl}`
+      : new URL(mapData.expansionTimesUrl, window.location.href).href;
+    const response = await fetch(expansionTimesUrl);
+    if (!response.ok) throw new Error(`Expansion times request failed: ${response.status}`);
+    expansionTimes = new Uint8Array(await response.arrayBuffer());
   }
 
   function isValidCapital(position) {
@@ -311,25 +505,68 @@
     context.restore();
   }
 
-  function renderLeaderboard() {
+  function renderLeaderboard(force = false) {
     if (!gameData?.players || !leaderboard) return;
+    const now = performance.now();
+    if (!force && now - leaderboardAt < LEADERBOARD_INTERVAL_MS) return;
+    leaderboardAt = now;
     const ranked = [...gameData.players].sort((a, b) =>
       (b.territorySize || 0) - (a.territorySize || 0) || (b.troops || 0) - (a.troops || 0));
-    leaderboard.innerHTML = `<div class="leaderboard-title">LIVE RANKING <span>${ranked.length} PLAYERS</span></div>`;
-    ranked.forEach((player, index) => {
+    let list = leaderboard.querySelector('.leaderboard-list');
+    const scrollTop = list?.scrollTop || 0;
+    const rankedEntries = ranked.map((player, index) => ({ player, index }));
+    const localIndex = ranked.findIndex((player) => player.playerId === localPlayerId);
+    const initialEntries = rankedEntries.slice(0, 9);
+    if (localIndex >= 9) initialEntries.push(rankedEntries[localIndex]);
+    const initialIds = new Set(initialEntries.map(({ player }) => player.playerId));
+    const displayEntries = [
+      ...initialEntries,
+      ...rankedEntries.filter(({ player }) => !initialIds.has(player.playerId))
+    ];
+    if (!list) {
+      leaderboard.innerHTML = '<div class="leaderboard-title"></div><div class="leaderboard-list"></div>';
+      list = leaderboard.querySelector('.leaderboard-list');
+    }
+    leaderboard.querySelector('.leaderboard-title').innerHTML = `LIVE RANKING <span>${ranked.length} PLAYERS</span>`;
+    const rows = document.createDocumentFragment();
+    displayEntries.forEach(({ player, index }) => {
       const ownerId = Number(player.playerId.replace('player-', ''));
       const color = playerColors.get(ownerId) || '#69c878';
       const row = document.createElement('div');
       row.className = `leaderboard-row${player.playerId === localPlayerId ? ' is-local' : ''}${player.isBot ? ' is-bot' : ''}${player.isAlive === false ? ' is-eliminated' : ''}`;
-      row.innerHTML = `<span class="leaderboard-rank">${index + 1}</span><span class="leaderboard-swatch" style="background:${color}"></span><span class="leaderboard-name"></span><span class="leaderboard-values">${(player.troops || 0).toLocaleString()}<br>${player.territorySize || 0} tiles</span>`;
+      row.dataset.playerId = player.playerId;
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.title = `Focus ${player.playerName || player.playerId}`;
+      row.innerHTML = `<span class="leaderboard-rank">${index + 1}</span><span class="leaderboard-swatch" style="background:${color}"></span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.troops)}<br>${player.territorySize || 0} tiles</span>`;
       row.querySelector('.leaderboard-name').textContent = `${player.isBot ? 'BOT ' : ''}${player.playerName || player.playerId}`;
-      leaderboard.appendChild(row);
+      rows.appendChild(row);
     });
+    list.replaceChildren(rows);
+    list.scrollTop = scrollTop;
+    if (!list.dataset.focusBound) {
+      list.addEventListener('click', (event) => {
+        const row = event.target.closest('.leaderboard-row');
+        if (row) focusPlayer(row.dataset.playerId);
+      });
+      list.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        const row = event.target.closest('.leaderboard-row');
+        if (!row) return;
+        event.preventDefault();
+        focusPlayer(row.dataset.playerId);
+      });
+      list.dataset.focusBound = 'true';
+    }
   }
 
   function updateLocalTroops(player) {
     if (!player) return;
-    troopCount.textContent = (player.troops || 0).toLocaleString();
+    targetTroops = player.troops || 0;
+    if (!renderLoopRunning) {
+      displayTroops = targetTroops;
+      troopCount.textContent = formatTroops(targetTroops);
+    }
     territoryCount.textContent = player.territorySize || 0;
     troopDisplay.classList.toggle('is-attacking', Boolean(player.expansionActive));
     cancelButton.hidden = !player.expansionActive;
@@ -345,15 +582,15 @@
     if (territoryCanvas.width !== width || territoryCanvas.height !== height) rebuildTerritoryLayer();
     context.drawImage(territoryCanvas, 0, 0, width, height);
     drawSpawnPoints();
-    if (!activeGame && gameData.players) {
+    if (spawnPhase && gameData.players) {
       for (const player of gameData.players) {
         if (player.spawnPosition == null || !player.capitalColor) continue;
         if (player.playerId === localPlayerId) continue;
         drawCapital(player.spawnPosition, player.capitalColor);
       }
     }
-    if (!activeGame && selectedPosition !== null) drawCapital(selectedPosition, selectedColor);
-    TerriPlayerLabelRenderer.draw(context, gameData, zoom, territoryVersion);
+    if (spawnPhase && selectedPosition !== null) drawCapital(selectedPosition, selectedColor);
+    TerriPlayerLabelRenderer.draw(gameData, zoom, territoryVersion);
     drawHover();
   }
 
@@ -391,6 +628,7 @@
   }
 
   mapFrame.addEventListener('wheel', function (event) {
+    if (eliminationAnimationFrame) return;
     if (event.shiftKey) {
       event.preventDefault();
       powerSlider.value = clamp(Number(powerSlider.value) + (event.deltaY > 0 ? -5 : 5), 1, 100);
@@ -404,6 +642,7 @@
   }, { passive: false });
 
   mapFrame.addEventListener('pointerdown', function (event) {
+    if (eliminationAnimationFrame) return;
     dragStart = { x: event.clientX - panX, y: event.clientY - panY };
     dragMoved = false;
     mapFrame.setPointerCapture(event.pointerId);
@@ -471,7 +710,7 @@
   });
 
   cancelButton.addEventListener('click', function () {
-    window.TerriCommunicator?.send(window.TerriProtocolCodes.CANCEL_EXPANSION, { playerId: localPlayerId });
+    window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId));
     cancelButton.hidden = true;
   });
 
@@ -494,16 +733,23 @@
       spawnSubmitHandler = handler;
     },
     start(data) {
+      stopRenderLoop();
       gameData = data;
       territoryVersion = 0;
+      displayTroops = 0;
+      targetTroops = 0;
       localPlayerId = data.playerId;
       activeGame = false;
       gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
       gameData.owners = new Int32Array(data.map.width * data.map.height);
       terrain = null;
+      expansionTimes = null;
       loadTerrain(data.map).catch((error) => {
         console.error('Unable to load terrain map:', error);
         spawnMessage.textContent = 'MAP DATA UNAVAILABLE // REFRESH TO RETRY';
+      });
+      loadExpansionTimes(data.map).catch((error) => {
+        console.warn('Expansion times unavailable; using server timing only:', error.message);
       });
       mapFrame.style.aspectRatio = `${data.map.width} / ${data.map.height}`;
       selectedPosition = null;
@@ -513,6 +759,10 @@
       playerColors = new Map();
       spawnPhase = null;
       selectionLocked = false;
+      localPlayerEliminated = false;
+      localPlayerWon = false;
+      if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+      eliminationAnimationFrame = null;
       resetMapTransform();
       resizeCanvas();
     },
@@ -558,6 +808,8 @@
     startActiveGame(data) {
       spawnPhase = null;
       activeGame = true;
+      localPlayerEliminated = false;
+      localPlayerWon = false;
       selectionLocked = true;
       clearInterval(timerHandle);
       spawnHud.hidden = true;
@@ -569,7 +821,6 @@
       if (data.players) {
         gameData.players = data.players;
         data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
-        gameData.owners = Int32Array.from(data.owners || gameData.owners);
         for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
         rebuildTerritoryLayer();
         const player = data.players.find((item) => item.playerId === localPlayerId);
@@ -578,16 +829,23 @@
         updateLocalTroops(player);
         selectedPosition = player?.spawnPosition ?? null;
       }
-      renderLeaderboard();
+      resetInterpolation();
+      renderLeaderboard(true);
       draw();
+      startRenderLoop();
     },
     onMapAction(handler) {
       mapActionHandler = handler;
     },
     applyGameUpdate(data) {
-      for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
-      if (data.changes?.length) territoryVersion += 1;
-      updateTerritoryLayer(data.changes);
+      const localPlayerBeforeAlive = gameData.players.find((player) => player.playerId === localPlayerId)?.isAlive !== false;
+      const now = performance.now();
+      if (lastPacketAt) {
+        const gap = now - lastPacketAt;
+        packetIntervalMs = Math.min(250, Math.max(30, packetIntervalMs * 0.8 + gap * 0.2));
+      }
+      lastPacketAt = now;
+      queueChanges(data.changes);
       for (const player of data.players || []) {
         const current = gameData.players.find((item) => item.playerId === player.playerId);
         if (current) Object.assign(current, player);
@@ -598,13 +856,35 @@
         }
         if (player.playerId === localPlayerId) updateLocalTroops(current || player);
       }
+      const localPlayerAfter = gameData.players.find((player) => player.playerId === localPlayerId);
+      if (!localPlayerEliminated && localPlayerBeforeAlive && localPlayerAfter?.isAlive === false) {
+        localPlayerEliminated = true;
+        activeGame = false;
+        selectionLocked = true;
+        attackRatioPanel.hidden = true;
+        cancelButton.hidden = true;
+        troopDisplay.classList.remove('is-attacking');
+        animateMapToCenter();
+      }
+      if (!localPlayerWon && localPlayerAfter?.isWinner === true) {
+        localPlayerWon = true;
+        activeGame = false;
+        selectionLocked = true;
+        attackRatioPanel.hidden = true;
+        cancelButton.hidden = true;
+        troopDisplay.classList.remove('is-attacking');
+        animateMapToCenter();
+      }
       updateRatioDisplay();
       renderLeaderboard();
-      draw();
+      if (!renderLoopRunning) draw();
     },
     rejectExpansion(data) {
       troopDisplay.classList.remove('is-attacking');
       spawnMessage.textContent = `EXPANSION REJECTED // ${data.reason}`;
+    },
+    stop() {
+      stopRenderLoop();
     }
   };
 }());

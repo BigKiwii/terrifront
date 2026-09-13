@@ -42,7 +42,7 @@ class BotManager {
     if (!this.botCooldowns.has(playerId)) {
       this.botCooldowns.set(playerId, Math.floor(Math.random() * profile.cooldownTicks));
     }
-    if (this.expansionManager.isActive(playerId)) return;
+    if (this.expansionManager.getActiveCount(playerId) >= 3) return;
     if (tickCount < this.botCooldowns.get(playerId)) return;
     if (Math.floor(Math.random() * 100) >= profile.triggerChance) return;
     this.botCooldowns.set(playerId, tickCount + profile.cooldownTicks);
