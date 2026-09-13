@@ -4,6 +4,7 @@
   const canvas = document.querySelector('#game-canvas');
   const dynamicCanvas = document.querySelector('#dynamic-canvas');
   const mapFrame = document.querySelector('.map-frame');
+  const gameScreen = document.querySelector('#game-screen');
   const spawnHud = document.querySelector('#spawn-hud');
   const spawnTime = document.querySelector('#spawn-time');
   const progressBar = document.querySelector('#spawn-progress-bar');
@@ -58,6 +59,7 @@
   let localPlayerWon = false;
   const TROOP_SMOOTHING_MS = 90;
   const LEADERBOARD_INTERVAL_MS = 250;
+  const LABEL_UPDATE_INTERVAL_MS = 250;
   const PLAYER_FOCUS_ZOOM = 4;
   let pendingChanges = [];
   let pendingHead = 0;
@@ -73,7 +75,10 @@
   let sceneDirty = true;
   let dynamicLayerDirty = true;
   let labelsDirty = true;
+  let labelsCameraDirty = true;
+  let lastLabelDrawAt = 0;
   let labelDrawFrame = null;
+  let canvasResizeFrame = null;
   let gameSessionId = 0;
 
   function clamp(value, minimum, maximum) {
@@ -164,7 +169,7 @@
     smoothTroops(deltaMs);
     drawScene();
     drawDynamic();
-    if (labelsDirty) drawLabels();
+    if (labelsDirty && (labelsCameraDirty || performance.now() - lastLabelDrawAt >= LABEL_UPDATE_INTERVAL_MS)) drawLabels();
     requestAnimationFrame(renderFrame);
   }
 
@@ -182,6 +187,10 @@
     timerHandle = null;
     if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
     eliminationAnimationFrame = null;
+    if (labelDrawFrame !== null) cancelAnimationFrame(labelDrawFrame);
+    labelDrawFrame = null;
+    if (canvasResizeFrame !== null) cancelAnimationFrame(canvasResizeFrame);
+    canvasResizeFrame = null;
   }
 
   function applyMapTransform() {
@@ -190,6 +199,8 @@
     panX = clamp(panX, -maxPanX, maxPanX);
     panY = clamp(panY, -maxPanY, maxPanY);
     mapFrame.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
+    labelsCameraDirty = true;
+    TerriPlayerLabelRenderer.invalidateLayout();
     scheduleLabelDraw();
   }
 
@@ -265,6 +276,8 @@
   }
 
   function resizeCanvas() {
+    if (mapFrame.clientWidth <= 10 || mapFrame.clientHeight <= 10) return false;
+    TerriPlayerLabelRenderer.invalidateLayout();
     const width = gameData?.map.width || 876;
     const height = gameData?.map.height || 694;
     mapScale = renderScale * Math.min(window.devicePixelRatio || 1, 2);
@@ -285,6 +298,20 @@
       composeSceneLayer();
       draw();
     }
+    return true;
+  }
+
+  function scheduleCanvasResize() {
+    if (canvasResizeFrame !== null) return;
+    canvasResizeFrame = requestAnimationFrame(() => {
+      canvasResizeFrame = null;
+      if (gameScreen.hidden) return;
+      if (!resizeCanvas()) {
+        scheduleCanvasResize();
+        return;
+      }
+      applyMapTransform();
+    });
   }
 
   function mapMetrics() {
@@ -644,6 +671,8 @@
     if (!gameData || !terrain) return;
     TerriPlayerLabelRenderer.draw(gameData, zoom, territoryVersion);
     labelsDirty = false;
+    labelsCameraDirty = false;
+    lastLabelDrawAt = performance.now();
   }
 
   function scheduleLabelDraw() {
@@ -651,7 +680,7 @@
     if (labelDrawFrame !== null) return;
     labelDrawFrame = requestAnimationFrame(() => {
       labelDrawFrame = null;
-      if (gameData && terrain) drawLabels();
+      if (gameData && terrain && labelsDirty && labelsCameraDirty) drawLabels();
     });
   }
 
@@ -778,7 +807,7 @@
   mapFrame.addEventListener('pointerup', stopDragging);
   mapFrame.addEventListener('pointercancel', stopDragging);
   window.addEventListener('resize', function () {
-    resizeCanvas();
+    scheduleCanvasResize();
     applyMapTransform();
   });
 
@@ -821,11 +850,19 @@
       activeGame = false;
       gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
       gameData.owners = new Int32Array(data.map.width * data.map.height);
+      territoryCanvas.width = data.map.width;
+      territoryCanvas.height = data.map.height;
+      territoryContext.clearRect(0, 0, data.map.width, data.map.height);
       terrain = null;
       expansionTimes = null;
+      context.clearRect(0, 0, data.map.width, data.map.height);
+      dynamicContext.clearRect(0, 0, data.map.width, data.map.height);
+      sceneContext.clearRect(0, 0, sceneCanvas.width, sceneCanvas.height);
       sceneDirty = true;
       dynamicLayerDirty = true;
       labelsDirty = true;
+      labelsCameraDirty = true;
+      lastLabelDrawAt = 0;
       loadTerrain(data.map, sessionId).catch((error) => {
         if (sessionId !== gameSessionId) return;
         console.error('Unable to load terrain map:', error);
@@ -850,7 +887,7 @@
       if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
       eliminationAnimationFrame = null;
       resetMapTransform();
-      resizeCanvas();
+      scheduleCanvasResize();
     },
     beginSpawnPhase(data) {
       activeGame = false;

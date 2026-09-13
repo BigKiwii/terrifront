@@ -8,6 +8,9 @@
   let labelCanvas = null;
   let labelContext = null;
   let mapCanvas = null;
+  let mapBounds = null;
+  const MIN_LABEL_PIXELS = 7;
+  const LABEL_CACHE_INTERVAL_MS = 250;
 
   function formatTroops(value) {
     return Math.round(Number(value) || 0).toLocaleString('en-US').replace(/,/g, ' ');
@@ -97,7 +100,10 @@
     screen.appendChild(labelCanvas);
     labelContext = labelCanvas.getContext('2d');
     resizeLabelCanvas();
-    window.addEventListener('resize', resizeLabelCanvas);
+    window.addEventListener('resize', () => {
+      mapBounds = null;
+      resizeLabelCanvas();
+    });
   }
 
   function draw(gameData, zoom, territoryVersion = 0) {
@@ -105,15 +111,14 @@
     const width = gameData.map.width;
     const height = gameData.map.height;
     const now = performance.now();
-    const cacheExpired = now - cachedAt >= 500;
+    const cacheExpired = now - cachedAt >= LABEL_CACHE_INTERVAL_MS;
     if (gameData !== cachedGameData || (territoryVersion !== cachedTerritoryVersion && cacheExpired)) {
       cachedSquares = largestOwnedSquares(gameData.owners, width, height);
       cachedGameData = gameData;
       cachedTerritoryVersion = territoryVersion;
       cachedAt = now;
     }
-    resizeLabelCanvas();
-    const mapBounds = mapCanvas.getBoundingClientRect();
+    if (!mapBounds) mapBounds = mapCanvas.getBoundingClientRect();
     const scaleX = mapBounds.width / width;
     const scaleY = mapBounds.height / height;
     const biggestPlayer = gameData.players
@@ -125,7 +130,7 @@
     for (const player of gameData.players) {
       const ownerId = Number(player.playerId.replace('player-', ''));
       const square = cachedSquares.get(ownerId);
-      if (!square || square.size * zoom < 1) continue;
+      if (!square || Math.min(square.size * scaleX, square.size * scaleY) < MIN_LABEL_PIXELS) continue;
       const screenX = mapBounds.left + square.x * scaleX;
       const screenY = mapBounds.top + square.y * scaleY;
       const screenWidth = square.size * scaleX;
@@ -144,7 +149,7 @@
     const width = gameData.map.width;
     const height = gameData.map.height;
     const now = performance.now();
-    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion || now - cachedAt >= 500) {
+    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion || now - cachedAt >= LABEL_CACHE_INTERVAL_MS) {
       cachedSquares = largestOwnedSquares(gameData.owners, width, height);
       cachedGameData = gameData;
       cachedTerritoryVersion = territoryVersion;
@@ -162,5 +167,9 @@
     return { x: square.x + square.size / 2, y: square.y + square.size / 2 };
   }
 
-  window.TerriPlayerLabelRenderer = { init, draw, getLabelCenter };
+  function invalidateLayout() {
+    mapBounds = null;
+  }
+
+  window.TerriPlayerLabelRenderer = { init, draw, getLabelCenter, invalidateLayout };
 }());
