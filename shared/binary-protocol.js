@@ -30,7 +30,8 @@ const REASON = Object.freeze({
   ALREADY_OWNED: 13,
   NO_BORDER_TERRITORY: 14,
   NOT_ENOUGH_TROOPS: 15,
-  EXPANSION_NOT_FOUND: 16
+  EXPANSION_NOT_FOUND: 16,
+  NO_WATER_ROUTE: 17
 });
 
 const REASON_NAMES = Object.keys(REASON);
@@ -228,13 +229,15 @@ function encodeGameStarted(state) {
 }
 
 function encodeGameUpdate(state) {
-  const writer = new BinaryWriter(32 + state.changes.length * 6 + state.players.length * 17);
+  const boats = state.boats || [];
+  const writer = new BinaryWriter(32 + state.changes.length * 6 + state.players.length * 17 + boats.length * 10);
   writer.u8(OP.GAME_UPDATE);
   writer.u32(state.tickCount);
   let flags = 0;
   if (state.changes.length) flags |= 1;
   if (state.players.length) flags |= 2;
   if (state.winnerId) flags |= 4;
+  if (boats.length) flags |= 8;
   writer.u8(flags);
   if (state.changes.length) writeChanges(writer, state.changes);
   if (state.players.length) {
@@ -242,6 +245,14 @@ function encodeGameUpdate(state) {
     for (const player of state.players) writePlayer(writer, player, false);
   }
   if (state.winnerId) writer.u16(playerNumber(state.winnerId));
+  if (boats.length) {
+    writer.u16(boats.length);
+    for (const boat of boats) {
+      writer.u16(boat.ownerId);
+      writer.u32(boat.position);
+      writer.u32(boat.troops);
+    }
+  }
   return writer.finish();
 }
 
@@ -291,7 +302,13 @@ function decodeServerMessage(value) {
     const players = [];
     if (flags & 2) for (let index = 0, count = reader.u16(); index < count; index += 1) players.push(readPlayer(reader, false));
     const winnerId = flags & 4 ? `player-${reader.u16()}` : null;
-    return { opcode, payload: { tickCount, changes, players, winnerId } };
+    const boats = [];
+    if (flags & 8) {
+      for (let index = 0, count = reader.u16(); index < count; index += 1) {
+        boats.push({ ownerId: reader.u16(), position: reader.u32(), troops: reader.u32() });
+      }
+    }
+    return { opcode, payload: { tickCount, changes, players, winnerId, boats } };
   }
   throw new Error(`Unknown binary protocol opcode: ${opcode}`);
 }

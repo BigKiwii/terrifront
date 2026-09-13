@@ -3,6 +3,7 @@ const SpawnManager = require('../game-logic/spawn-manager');
 const TerritoryManager = require('../game-logic/territory-manager');
 const ExpansionManager = require('../game-logic/expansion-manager');
 const { BotManager } = require('../game-logic/bot-manager');
+const BoatManager = require('../game-logic/boat-manager');
 const {
   ECONOMY_TICKS_PER_SECOND,
   BOT_COUNT
@@ -18,6 +19,7 @@ class GameEngine {
     this.spawnManager = null;
     this.territoryManager = null;
     this.expansionManager = null;
+    this.boatManager = null;
     this.botManager = null;
     this.tickCount = 0;
     this.economyTickCount = 0;
@@ -30,6 +32,7 @@ class GameEngine {
     if (!this.spawnManager) this.spawnManager = new SpawnManager(this.map);
     if (!this.territoryManager) this.territoryManager = new TerritoryManager(this.map);
     if (!this.expansionManager) this.expansionManager = new ExpansionManager(this.map, this.territoryManager, this.players);
+    if (!this.boatManager) this.boatManager = new BoatManager(this.map, this.territoryManager, this.players, this.expansionManager);
     this.players.set(playerId, { playerId, name: playerName, troops: 0, spawnPosition: null, spawnCells: [], capitalColor: null, isBot });
 
     return {
@@ -135,13 +138,14 @@ class GameEngine {
     this.tickCount += 1;
     this.botManager?.tick(this.tickCount);
     const changes = this.expansionManager.tick();
+    for (const landing of this.boatManager.tick()) changes.push(landing);
     this.updateWinner();
     const economyTick = this.tickCount % ECONOMY_TICKS_PER_SECOND === 0;
     if (economyTick) {
       this.economyTickCount += 1;
       this.collectIncome();
     }
-    if (changes.length === 0 && !economyTick) return null;
+    if (changes.length === 0 && !economyTick && this.boatManager.boats.size === 0) return null;
     return this.getTickState(changes);
   }
 
@@ -152,11 +156,17 @@ class GameEngine {
     if (!this.map.isLand(position)) return { accepted: false, reason: 'NOT_LAND' };
     const ownerId = Number(playerId.replace('player-', ''));
     if (this.map.owners[position] === ownerId) return { accepted: false, reason: 'ALREADY_OWNED' };
-    return this.expansionManager.start(playerId, power, position);
+    const result = this.expansionManager.start(playerId, power, position);
+    // Unreachable over land: try to ferry troops there instead.
+    if (!result.accepted && result.reason === 'NO_BORDER_TERRITORY') {
+      return this.boatManager.launch(playerId, power, position);
+    }
+    return result;
   }
 
   cancelExpansion(playerId) {
     this.expansionManager.cancel(playerId);
+    this.boatManager.cancel(playerId);
   }
 
   collectIncome() {
@@ -183,6 +193,7 @@ class GameEngine {
       if (this.territoryManager.getTerritorySize(ownerId) < targetSize) continue;
       this.winnerId = player.playerId;
       this.expansionManager.stopAllAttacks();
+      this.boatManager.stopAll();
       return;
     }
   }
@@ -196,7 +207,7 @@ class GameEngine {
         playerName: player.name,
         troops: player.troops,
         territorySize: this.territoryManager?.getTerritorySize(Number(player.playerId.replace('player-', ''))) || 0,
-        expansionActive: this.expansionManager?.isActive(player.playerId) || false,
+        expansionActive: this.expansionManager?.isActive(player.playerId) || this.boatManager?.getActiveCount(player.playerId) > 0 || false,
         spawnPosition: player.spawnPosition,
         capitalColor: player.capitalColor,
         isBot: player.isBot,
@@ -219,13 +230,14 @@ class GameEngine {
         playerName: player.name,
         troops: player.troops,
         territorySize: this.territoryManager.getTerritorySize(Number(player.playerId.replace('player-', ''))),
-        expansionActive: this.expansionManager.isActive(player.playerId),
+        expansionActive: this.expansionManager.isActive(player.playerId) || this.boatManager.getActiveCount(player.playerId) > 0,
         isBot: player.isBot,
         isWinner: player.playerId === this.winnerId,
         spawnPosition: player.spawnPosition,
         capitalColor: player.capitalColor,
         isAlive: this.territoryManager.getTerritorySize(Number(player.playerId.replace('player-', ''))) > 0
       })),
+      boats: this.boatManager.serialize(),
       winnerId: this.winnerId
     };
   }

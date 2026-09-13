@@ -75,6 +75,7 @@
   let sceneDirty = true;
   let dynamicLayerDirty = true;
   let labelsDirty = true;
+  let boats = [];
   let labelsCameraDirty = true;
   let lastLabelDrawAt = 0;
   let labelDrawFrame = null;
@@ -663,8 +664,26 @@
       }
     }
     if (spawnPhase && selectedPosition !== null) drawCapital(selectedPosition, selectedColor);
+    drawBoats();
     drawHover();
     dynamicLayerDirty = false;
+  }
+
+  // Troops at sea, drawn as a small marker in the owner's colour.
+  function drawBoats() {
+    if (!boats.length) return;
+    const width = gameData.map.width;
+    dynamicContext.save();
+    for (const boat of boats) {
+      const x = boat.position % width;
+      const y = Math.floor(boat.position / width);
+      const colors = warFrontPlayerColors(playerColors.get(boat.ownerId) || '#f4d35e');
+      dynamicContext.fillStyle = colors.territory;
+      dynamicContext.fillRect(x - 1, y - 1, 3, 3);
+      dynamicContext.fillStyle = colors.border;
+      dynamicContext.fillRect(x, y, 1, 1);
+    }
+    dynamicContext.restore();
   }
 
   function drawLabels() {
@@ -862,6 +881,7 @@
       dynamicLayerDirty = true;
       labelsDirty = true;
       labelsCameraDirty = true;
+      boats = [];
       lastLabelDrawAt = 0;
       loadTerrain(data.map, sessionId).catch((error) => {
         if (sessionId !== gameSessionId) return;
@@ -974,6 +994,9 @@
         packetIntervalMs = Math.min(250, Math.max(30, packetIntervalMs * 0.8 + gap * 0.2));
       }
       lastPacketAt = now;
+      const hadBoats = boats.length > 0;
+      boats = data.boats || [];
+      if (hadBoats || boats.length) invalidateDynamic();
       queueChanges(data.changes);
       for (const player of data.players || []) {
         const current = gameData.players.find((item) => item.playerId === player.playerId);
