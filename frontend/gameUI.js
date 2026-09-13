@@ -479,7 +479,7 @@
     const x = hoverPosition % gameData.map.width;
     const y = Math.floor(hoverPosition / gameData.map.width);
     context.save();
-    context.strokeStyle = '#67d4dc';
+    context.strokeStyle = '#f4d35e';
     context.lineWidth = 1;
     context.globalAlpha = 0.9;
     context.strokeRect(x - 2.5, y - 2.5, 6, 6);

@@ -56,7 +56,7 @@
     context.textBaseline = baselineBottom ? 'bottom' : 'top';
     context.lineWidth = Math.max(1, Math.round(fontSize * 0.12));
     context.strokeStyle = '#071221';
-    context.fillStyle = '#f4f3ea';
+    context.fillStyle = '#fff3b0';
     context.strokeText(text, centerX, textY);
     context.fillText(text, centerX, textY);
   }
