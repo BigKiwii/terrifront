@@ -13,6 +13,7 @@
   const territoryCount = document.querySelector('#territory-count');
   const leaderboard = document.querySelector('#leaderboard');
   const cancelButton = document.querySelector('#cancel-button');
+  const winnerBanner = document.querySelector('#winner-banner');
   const attackRatioPanel = document.querySelector('#attack-ratio-panel');
   const powerSlider = document.querySelector('#power-slider');
   const ratioPercent = document.querySelector('#ratio-percent');
@@ -844,6 +845,8 @@
       selectionLocked = false;
       localPlayerEliminated = false;
       localPlayerWon = false;
+      winnerBanner.textContent = 'WINNER';
+      winnerBanner.hidden = true;
       if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
       eliminationAnimationFrame = null;
       resetMapTransform();
@@ -948,6 +951,8 @@
       const localPlayerAfter = gameData.players.find((player) => player.playerId === localPlayerId);
       if (!localPlayerEliminated && localPlayerBeforeAlive && localPlayerAfter?.isAlive === false) {
         localPlayerEliminated = true;
+        winnerBanner.textContent = 'LOST';
+        winnerBanner.hidden = false;
         activeGame = false;
         selectionLocked = true;
         attackRatioPanel.hidden = true;
@@ -957,6 +962,7 @@
       }
       if (!localPlayerWon && localPlayerAfter?.isWinner === true) {
         localPlayerWon = true;
+        winnerBanner.hidden = false;
         activeGame = false;
         selectionLocked = true;
         attackRatioPanel.hidden = true;
@@ -978,6 +984,7 @@
       stopRenderLoop();
       spawnPhase = null;
       activeGame = false;
+      winnerBanner.hidden = true;
     }
   };
 }());
