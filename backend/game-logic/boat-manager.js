@@ -176,8 +176,13 @@ class BoatManager {
     const player = this.players.get(boat.playerId);
     if (player && survivors > 0) {
       player.troops += survivors;
-      // Spend the survivors pushing inland from the new beachhead.
-      this.expansionManager.start(boat.playerId, MAX_POWER, this.inlandTarget(landing, ownerId));
+      // Push inland with the landing party only. start() spends a percentage of
+      // the player's whole pool, so express the survivors as that percentage and
+      // round down - a landing must never spend troops that stayed at home.
+      const power = Math.floor((survivors / player.troops) * MAX_POWER);
+      if (power >= 1) {
+        this.expansionManager.start(boat.playerId, power, this.inlandTarget(landing, ownerId));
+      }
     }
     return { position: landing, owner: ownerId };
   }
