@@ -62,6 +62,11 @@
     TerriCommunicator.send(PROTOCOL.encodeExpansionRequest(payload.playerId, payload.position, power));
   });
 
+  TerriGameUI.onBoatAction(function (payload) {
+    const power = Math.round(Number(powerSlider.value) * 10);
+    TerriCommunicator.send(PROTOCOL.encodeBoatRequest(payload.playerId, payload.position, power));
+  });
+
   quitButton.addEventListener('click', function () {
     TerriCommunicator.socket?.close();
     TerriGameUI.stop();

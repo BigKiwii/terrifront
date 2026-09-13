@@ -10,7 +10,8 @@ const OP = Object.freeze({
   REQUEST_GAME: 0x10,
   SPAWN_POSITION: 0x11,
   EXPANSION_REQUEST: 0x12,
-  CANCEL_EXPANSION: 0x13
+  CANCEL_EXPANSION: 0x13,
+  BOAT_REQUEST: 0x14
 });
 
 const REASON = Object.freeze({
@@ -320,6 +321,7 @@ function decodeClientMessage(value) {
   if (opcode === OP.SPAWN_POSITION) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32() };
   if (opcode === OP.EXPANSION_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
   if (opcode === OP.CANCEL_EXPANSION) return { opcode, playerId: `player-${reader.u16()}` };
+  if (opcode === OP.BOAT_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
   throw new Error(`Unknown client opcode: ${opcode}`);
 }
 
@@ -328,7 +330,7 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 if (typeof window !== 'undefined') {
-  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u16(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => writer.u16(playerNumber(id))) };
+  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u16(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => writer.u16(playerNumber(id))), encodeBoatRequest: (id, position, power) => encodeClientRequest(OP.BOAT_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }) };
 }
 
 function encodeClientRequest(opcode, writePayload) {

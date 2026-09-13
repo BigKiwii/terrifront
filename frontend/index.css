@@ -165,6 +165,13 @@ h1 span { color: var(--cyan); }
 .quit-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 .cancel-button { position: absolute; z-index: 7; bottom: 70px; left: 50%; transform: translateX(-50%); border: 1px solid #e63946; padding: 5px 16px; color: #e63946; background: rgba(7, 18, 33, 0.9); font-family: var(--data-font); font-size: 9px; letter-spacing: 0.1em; cursor: pointer; }
 .cancel-button[hidden] { display: none; }
+.map-menu { position: absolute; z-index: 9; display: grid; min-width: 96px; border: 1px solid var(--line); background: rgba(7, 18, 33, 0.94); box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.5); font-family: var(--data-font); }
+.map-menu[hidden] { display: none; }
+.map-menu-item { border: 0; border-bottom: 1px solid rgba(255, 255, 255, 0.12); padding: 8px 16px; color: var(--paper); background: none; font: inherit; font-size: 10px; letter-spacing: 0.12em; text-align: left; cursor: pointer; }
+.map-menu-item:last-child { border-bottom: 0; }
+.map-menu-item:hover, .map-menu-item:focus-visible { outline: none; color: var(--night); background: var(--cyan); }
+.map-menu-item[disabled] { opacity: 0.35; cursor: default; }
+.map-menu-item[disabled]:hover { color: var(--paper); background: none; }
 .winner-banner { position: absolute; z-index: 9; right: 8vw; bottom: 24px; left: 8vw; display: grid; min-height: 116px; place-items: center; border: 3px solid var(--paper); color: var(--paper); background: rgba(7, 18, 33, 0.94); box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.5), 0 0 28px rgba(244, 211, 94, 0.28); font-family: "New Rocker", system-ui; font-size: clamp(42px, 8vw, 84px); line-height: 1; letter-spacing: 0.04em; text-shadow: 4px 4px 0 #111; animation: winner-rise 500ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .winner-banner[hidden] { display: none; }
 .troop-display { position: absolute; z-index: 6; right: 14px; bottom: 14px; min-width: 180px; display: grid; gap: 2px; border: 1px solid rgba(244, 243, 234, 0.9); padding: 7px 18px; color: var(--paper); background: rgba(7, 18, 33, 0.88); box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45); font-family: var(--data-font); font-size: 11px; letter-spacing: 0.04em; text-align: center; }

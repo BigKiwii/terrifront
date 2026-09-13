@@ -35,6 +35,10 @@
   <main class="game-screen" id="game-screen" hidden>
     <button class="quit-button" id="quit-button" type="button">QUIT</button>
     <button class="cancel-button" id="cancel-button" hidden type="button">CANCEL x</button>
+    <div class="map-menu" id="map-menu" role="menu" hidden>
+      <button type="button" class="map-menu-item" data-action="attack" role="menuitem">ATTACK</button>
+      <button type="button" class="map-menu-item" data-action="boat" role="menuitem">BOAT</button>
+    </div>
     <div class="winner-banner" id="winner-banner" hidden role="status" aria-live="polite">WINNER</div>
     <div class="troop-display" id="troop-display" hidden aria-live="polite">
       <strong><span aria-hidden="true">⚔</span> <b id="troop-count">0</b> troops</strong>

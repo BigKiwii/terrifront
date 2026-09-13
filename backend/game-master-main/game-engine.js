@@ -156,12 +156,19 @@ class GameEngine {
     if (!this.map.isLand(position)) return { accepted: false, reason: 'NOT_LAND' };
     const ownerId = Number(playerId.replace('player-', ''));
     if (this.map.owners[position] === ownerId) return { accepted: false, reason: 'ALREADY_OWNED' };
-    const result = this.expansionManager.start(playerId, power, position);
-    // Unreachable over land: try to ferry troops there instead.
-    if (!result.accepted && result.reason === 'NO_BORDER_TERRITORY') {
-      return this.boatManager.launch(playerId, power, position);
-    }
-    return result;
+    return this.expansionManager.start(playerId, power, position);
+  }
+
+  // Explicit sea crossing, chosen from the map menu. Unlike an attack this does
+  // not need a shared border, and the target may be neutral land.
+  requestBoat(playerId, position, power = 1000) {
+    if (this.phase !== 'ACTIVE') return { accepted: false, reason: 'GAME_NOT_ACTIVE' };
+    if (this.winnerId) return { accepted: false, reason: 'GAME_FINISHED' };
+    if (!Number.isInteger(position) || position < 0 || position >= this.map.cellCount) return { accepted: false, reason: 'INVALID_POSITION' };
+    if (!this.map.isLand(position)) return { accepted: false, reason: 'NOT_LAND' };
+    const ownerId = Number(playerId.replace('player-', ''));
+    if (this.map.owners[position] === ownerId) return { accepted: false, reason: 'ALREADY_OWNED' };
+    return this.boatManager.launch(playerId, power, position);
   }
 
   cancelExpansion(playerId) {

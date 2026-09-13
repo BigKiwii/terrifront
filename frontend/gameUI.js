@@ -5,6 +5,7 @@
   const dynamicCanvas = document.querySelector('#dynamic-canvas');
   const mapFrame = document.querySelector('.map-frame');
   const gameScreen = document.querySelector('#game-screen');
+  const mapMenu = document.querySelector('#map-menu');
   const spawnHud = document.querySelector('#spawn-hud');
   const spawnTime = document.querySelector('#spawn-time');
   const progressBar = document.querySelector('#spawn-progress-bar');
@@ -47,6 +48,8 @@
   let localPlayerId = null;
   let activeGame = false;
   let mapActionHandler = null;
+  let boatActionHandler = null;
+  let menuPosition = null;
   let mapScale = 1;
   let hoverPosition = null;
   let playerColors = new Map();
@@ -201,6 +204,7 @@
     panY = clamp(panY, -maxPanY, maxPanY);
     mapFrame.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
     labelsCameraDirty = true;
+    hideMapMenu();
     TerriPlayerLabelRenderer.invalidateLayout();
     scheduleLabelDraw();
   }
@@ -763,6 +767,7 @@
   }, { passive: false });
 
   mapFrame.addEventListener('pointerdown', function (event) {
+    if (event.button !== 0) return;
     if (eliminationAnimationFrame) return;
     dragStart = { x: event.clientX - panX, y: event.clientY - panY };
     dragMoved = false;
@@ -822,6 +827,61 @@
     invalidateDynamic();
     drawDynamic();
   }
+
+  function hideMapMenu() {
+    if (mapMenu.hidden) return;
+    mapMenu.hidden = true;
+    menuPosition = null;
+  }
+
+  function showMapMenu(event, position) {
+    menuPosition = position;
+    const bounds = gameScreen.getBoundingClientRect();
+    mapMenu.hidden = false;
+    // Clamp so the menu never opens off the edge of the screen.
+    const width = mapMenu.offsetWidth || 96;
+    const height = mapMenu.offsetHeight || 64;
+    const x = Math.min(event.clientX - bounds.left, bounds.width - width - 4);
+    const y = Math.min(event.clientY - bounds.top, bounds.height - height - 4);
+    mapMenu.style.left = `${Math.max(4, x)}px`;
+    mapMenu.style.top = `${Math.max(4, y)}px`;
+  }
+
+  mapFrame.addEventListener('contextmenu', function (event) {
+    event.preventDefault();
+    if (!activeGame || localPlayerId === null) return;
+    const position = positionFromPointer(event);
+    const ownerId = Number(localPlayerId.replace('player-', ''));
+    // Only offer the menu on land we do not already hold.
+    if (position === null || (terrain[position] & 0x80) === 0 || gameData.owners[position] === ownerId) {
+      hideMapMenu();
+      return;
+    }
+    showMapMenu(event, position);
+  });
+
+  mapMenu.addEventListener('click', function (event) {
+    const action = event.target.closest('.map-menu-item')?.dataset.action;
+    if (!action || menuPosition === null) return;
+    const position = menuPosition;
+    hideMapMenu();
+    if (action === 'attack') {
+      troopDisplay.classList.add('is-attacking');
+      mapActionHandler?.({ playerId: localPlayerId, position });
+    } else if (action === 'boat') {
+      troopDisplay.classList.add('is-attacking');
+      boatActionHandler?.({ playerId: localPlayerId, position });
+    }
+  });
+
+  document.addEventListener('pointerdown', function (event) {
+    if (mapMenu.hidden || mapMenu.contains(event.target)) return;
+    hideMapMenu();
+  });
+
+  window.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') hideMapMenu();
+  });
 
   mapFrame.addEventListener('pointerup', stopDragging);
   mapFrame.addEventListener('pointercancel', stopDragging);
@@ -985,6 +1045,9 @@
     },
     onMapAction(handler) {
       mapActionHandler = handler;
+    },
+    onBoatAction(handler) {
+      boatActionHandler = handler;
     },
     applyGameUpdate(data) {
       const localPlayerBeforeAlive = gameData.players.find((player) => player.playerId === localPlayerId)?.isAlive !== false;

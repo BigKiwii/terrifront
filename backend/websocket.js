@@ -67,6 +67,17 @@ server.on('connection', (socket) => {
       return;
     }
 
+    if (message.opcode === OP.BOAT_REQUEST) {
+      const result = gameMaster.requestBoat(message.playerId, message.position, message.power);
+      if (!result.accepted) {
+        socket.send(encodeRejected(OP.EXPANSION_REJECTED, result.reason));
+        return;
+      }
+      const player = gameMaster.players.get(message.playerId);
+      socket.send(encodeGameUpdate(player.engine.getTickState([])));
+      return;
+    }
+
     if (message.opcode === OP.CANCEL_EXPANSION) {
       const player = gameMaster.players.get(message.playerId);
       if (player) player.engine.cancelExpansion(message.playerId);
