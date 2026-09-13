@@ -2,6 +2,7 @@
   'use strict';
 
   const canvas = document.querySelector('#game-canvas');
+  const dynamicCanvas = document.querySelector('#dynamic-canvas');
   const mapFrame = document.querySelector('.map-frame');
   const spawnHud = document.querySelector('#spawn-hud');
   const spawnTime = document.querySelector('#spawn-time');
@@ -17,10 +18,13 @@
   const ratioPercent = document.querySelector('#ratio-percent');
   const ratioTroops = document.querySelector('#ratio-troops');
   const context = canvas.getContext('2d', { willReadFrequently: true });
+  const dynamicContext = dynamicCanvas.getContext('2d');
   const terrainCanvas = document.createElement('canvas');
   const terrainContext = terrainCanvas.getContext('2d');
   const territoryCanvas = document.createElement('canvas');
   const territoryContext = territoryCanvas.getContext('2d');
+  const sceneCanvas = document.createElement('canvas');
+  const sceneContext = sceneCanvas.getContext('2d');
   const renderScale = 1;
   TerriPlayerLabelRenderer.init(document.querySelector('#game-screen'), canvas);
   let gameData = null;
@@ -53,6 +57,7 @@
   let localPlayerWon = false;
   const TROOP_SMOOTHING_MS = 90;
   const LEADERBOARD_INTERVAL_MS = 250;
+  const PLAYER_FOCUS_ZOOM = 3.6;
   let pendingChanges = [];
   let pendingHead = 0;
   let drainRate = 0;
@@ -64,6 +69,11 @@
   let displayTroops = 0;
   let targetTroops = 0;
   let leaderboardAt = 0;
+  let sceneDirty = true;
+  let dynamicLayerDirty = true;
+  let labelsDirty = true;
+  let labelDrawFrame = null;
+  let gameSessionId = 0;
 
   function clamp(value, minimum, maximum) {
     return Math.min(Math.max(value, minimum), maximum);
@@ -134,6 +144,7 @@
     if (applied.length) {
       updateTerritoryLayer(applied);
       territoryVersion += 1;
+      labelsDirty = true;
     }
   }
 
@@ -150,7 +161,9 @@
     lastFrameAt = timestamp;
     drainPendingChanges(deltaMs);
     smoothTroops(deltaMs);
-    draw();
+    drawScene();
+    drawDynamic();
+    if (labelsDirty) drawLabels();
     requestAnimationFrame(renderFrame);
   }
 
@@ -164,6 +177,10 @@
   function stopRenderLoop() {
     renderLoopRunning = false;
     resetInterpolation();
+    clearInterval(timerHandle);
+    timerHandle = null;
+    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+    eliminationAnimationFrame = null;
   }
 
   function applyMapTransform() {
@@ -172,6 +189,7 @@
     panX = clamp(panX, -maxPanX, maxPanX);
     panY = clamp(panY, -maxPanY, maxPanY);
     mapFrame.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
+    scheduleLabelDraw();
   }
 
   function resetMapTransform() {
@@ -217,7 +235,7 @@
     if (!target) return;
     const mapWidth = gameData.map.width;
     const mapHeight = gameData.map.height;
-    const targetZoom = clamp(Math.max(zoom, 2.2), 1, 8);
+    const targetZoom = PLAYER_FOCUS_ZOOM;
     const viewportCenterX = window.innerWidth / 2;
     const viewportCenterY = window.innerHeight / 2;
     const currentBounds = mapFrame.getBoundingClientRect();
@@ -257,12 +275,19 @@
     mapScale = renderScale * Math.min(window.devicePixelRatio || 1, 2);
     canvas.style.width = `${mapFrame.clientWidth}px`;
     canvas.style.height = `${mapFrame.clientHeight}px`;
+    dynamicCanvas.style.width = `${canvas.offsetWidth}px`;
+    dynamicCanvas.style.height = `${canvas.offsetHeight}px`;
     canvas.width = Math.ceil(width * mapScale);
     canvas.height = Math.ceil(height * mapScale);
+    dynamicCanvas.width = Math.ceil(width * mapScale);
+    dynamicCanvas.height = Math.ceil(height * mapScale);
     context.setTransform(mapScale, 0, 0, mapScale, 0, 0);
+    dynamicContext.setTransform(mapScale, 0, 0, mapScale, 0, 0);
     context.imageSmoothingEnabled = false;
+    dynamicContext.imageSmoothingEnabled = false;
     if (terrain) {
       buildTerrainLayer();
+      composeSceneLayer();
       draw();
     }
   }
@@ -289,19 +314,19 @@
     const centerX = position % gameData.map.width;
     const centerY = Math.floor(position / gameData.map.width);
     const colors = warFrontPlayerColors(color);
-    context.save();
-    context.lineWidth = 1;
-    context.fillStyle = colors.territory;
-    context.strokeStyle = colors.border;
-    context.lineWidth = 1;
+    dynamicContext.save();
+    dynamicContext.lineWidth = 1;
+    dynamicContext.fillStyle = colors.territory;
+    dynamicContext.strokeStyle = colors.border;
+    dynamicContext.lineWidth = 1;
     for (let y = -2; y <= 2; y += 1) {
       for (let x = -2; x <= 2; x += 1) {
         if (Math.abs(x) === 2 && Math.abs(y) === 2) continue;
-        context.fillRect(centerX + x, centerY + y, 1, 1);
-        context.strokeRect(centerX + x, centerY + y, 1, 1);
+        dynamicContext.fillRect(centerX + x, centerY + y, 1, 1);
+        dynamicContext.strokeRect(centerX + x, centerY + y, 1, 1);
       }
     }
-    context.restore();
+    dynamicContext.restore();
   }
 
   function decodeTerrain(encodedTerrain) {
@@ -317,9 +342,11 @@
     return bytes;
   }
 
-  async function loadTerrain(mapData) {
+  async function loadTerrain(mapData, sessionId) {
     if (window.TerriEmbeddedTerrain) {
-      terrain = decodeEmbeddedBytes(window.TerriEmbeddedTerrain);
+      const decodedTerrain = decodeEmbeddedBytes(window.TerriEmbeddedTerrain);
+      if (sessionId !== gameSessionId) return;
+      terrain = decodedTerrain;
       buildTerrainLayer();
       draw();
       return;
@@ -329,15 +356,19 @@
       : new URL(mapData.terrainUrl, window.location.href).href;
     const response = await fetch(terrainUrl);
     if (!response.ok) throw new Error(`Terrain request failed: ${response.status}`);
-    terrain = new Uint8Array(await response.arrayBuffer());
+    const loadedTerrain = new Uint8Array(await response.arrayBuffer());
+    if (sessionId !== gameSessionId) return;
+    terrain = loadedTerrain;
     buildTerrainLayer();
     draw();
   }
 
-  async function loadExpansionTimes(mapData) {
+  async function loadExpansionTimes(mapData, sessionId) {
     if (!mapData.expansionTimesUrl) return;
     if (window.TerriEmbeddedExpansionTimes) {
-      expansionTimes = decodeEmbeddedBytes(window.TerriEmbeddedExpansionTimes);
+      const decodedExpansionTimes = decodeEmbeddedBytes(window.TerriEmbeddedExpansionTimes);
+      if (sessionId !== gameSessionId) return;
+      expansionTimes = decodedExpansionTimes;
       return;
     }
     const expansionTimesUrl = window.location.protocol === 'file:'
@@ -345,7 +376,9 @@
       : new URL(mapData.expansionTimesUrl, window.location.href).href;
     const response = await fetch(expansionTimesUrl);
     if (!response.ok) throw new Error(`Expansion times request failed: ${response.status}`);
-    expansionTimes = new Uint8Array(await response.arrayBuffer());
+    const loadedExpansionTimes = new Uint8Array(await response.arrayBuffer());
+    if (sessionId !== gameSessionId) return;
+    expansionTimes = loadedExpansionTimes;
   }
 
   function isValidCapital(position) {
@@ -392,6 +425,7 @@
       pixels.data[pixel + 3] = 255;
     }
     terrainContext.putImageData(pixels, 0, 0);
+    composeSceneLayer();
   }
 
   function warFrontPlayerColors(color) {
@@ -451,6 +485,7 @@
     for (let position = 0; position < gameData.owners.length; position += 1) {
       paintTerritoryTile(position);
     }
+    composeSceneLayer();
   }
 
   function updateTerritoryLayer(changes) {
@@ -460,6 +495,23 @@
       for (const neighbor of mapNeighbors(change.position)) affected.add(neighbor);
     }
     for (const position of affected) paintTerritoryTile(position);
+    composeSceneLayer();
+  }
+
+  function composeSceneLayer() {
+    if (!gameData || !terrainCanvas.width || !terrainCanvas.height) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    if (sceneCanvas.width !== width || sceneCanvas.height !== height) {
+      sceneCanvas.width = width;
+      sceneCanvas.height = height;
+    }
+    sceneContext.clearRect(0, 0, width, height);
+    sceneContext.drawImage(terrainCanvas, 0, 0, width, height);
+    if (territoryCanvas.width === width && territoryCanvas.height === height) {
+      sceneContext.drawImage(territoryCanvas, 0, 0, width, height);
+    }
+    sceneDirty = true;
   }
 
   function mapNeighbors(position) {
@@ -478,19 +530,19 @@
     if (hoverPosition === null || !spawnPhase || selectionLocked || !isValidCapital(hoverPosition)) return;
     const x = hoverPosition % gameData.map.width;
     const y = Math.floor(hoverPosition / gameData.map.width);
-    context.save();
-    context.strokeStyle = '#f4d35e';
-    context.lineWidth = 1;
-    context.globalAlpha = 0.9;
-    context.strokeRect(x - 2.5, y - 2.5, 6, 6);
-    context.restore();
+    dynamicContext.save();
+    dynamicContext.strokeStyle = '#f4d35e';
+    dynamicContext.lineWidth = 1;
+    dynamicContext.globalAlpha = 0.9;
+    dynamicContext.strokeRect(x - 2.5, y - 2.5, 6, 6);
+    dynamicContext.restore();
   }
 
   function drawSpawnPoints() {
     if (!spawnPhase || spawnPoints.size === 0) return;
-    context.save();
-    context.fillStyle = 'rgba(154, 162, 166, 0.9)';
-    context.globalAlpha = 0.9;
+    dynamicContext.save();
+    dynamicContext.fillStyle = 'rgba(154, 162, 166, 0.9)';
+    dynamicContext.globalAlpha = 0.9;
     for (const position of spawnPoints) {
       if (!isValidCapital(position)) continue;
       const centerX = position % gameData.map.width;
@@ -498,11 +550,11 @@
       for (let y = -2; y <= 2; y += 1) {
         for (let x = -2; x <= 2; x += 1) {
           if (Math.abs(x) === 2 && Math.abs(y) === 2) continue;
-          context.fillRect(centerX + x, centerY + y, 1, 1);
+          dynamicContext.fillRect(centerX + x, centerY + y, 1, 1);
         }
       }
     }
-    context.restore();
+    dynamicContext.restore();
   }
 
   function renderLeaderboard(force = false) {
@@ -538,26 +590,18 @@
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
       row.title = `Focus ${player.playerName || player.playerId}`;
+      row.addEventListener('click', () => focusPlayer(player.playerId));
+      row.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        focusPlayer(player.playerId);
+      });
       row.innerHTML = `<span class="leaderboard-rank">${index + 1}</span><span class="leaderboard-swatch" style="background:${color}"></span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.troops)}<br>${player.territorySize || 0} tiles</span>`;
       row.querySelector('.leaderboard-name').textContent = `${player.isBot ? 'BOT ' : ''}${player.playerName || player.playerId}`;
       rows.appendChild(row);
     });
     list.replaceChildren(rows);
     list.scrollTop = scrollTop;
-    if (!list.dataset.focusBound) {
-      list.addEventListener('click', (event) => {
-        const row = event.target.closest('.leaderboard-row');
-        if (row) focusPlayer(row.dataset.playerId);
-      });
-      list.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        const row = event.target.closest('.leaderboard-row');
-        if (!row) return;
-        event.preventDefault();
-        focusPlayer(row.dataset.playerId);
-      });
-      list.dataset.focusBound = 'true';
-    }
   }
 
   function updateLocalTroops(player) {
@@ -573,14 +617,21 @@
     updateRatioDisplay();
   }
 
-  function draw() {
+  function drawScene() {
     if (!gameData || !terrain) return;
     const width = gameData.map.width;
     const height = gameData.map.height;
+    if (!sceneDirty) return;
     context.clearRect(0, 0, width, height);
-    context.drawImage(terrainCanvas, 0, 0, width, height);
-    if (territoryCanvas.width !== width || territoryCanvas.height !== height) rebuildTerritoryLayer();
-    context.drawImage(territoryCanvas, 0, 0, width, height);
+    context.drawImage(sceneCanvas, 0, 0, width, height);
+    sceneDirty = false;
+  }
+
+  function drawDynamic() {
+    if (!gameData || !terrain || !dynamicLayerDirty) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    dynamicContext.clearRect(0, 0, width, height);
     drawSpawnPoints();
     if (spawnPhase && gameData.players) {
       for (const player of gameData.players) {
@@ -590,8 +641,34 @@
       }
     }
     if (spawnPhase && selectedPosition !== null) drawCapital(selectedPosition, selectedColor);
-    TerriPlayerLabelRenderer.draw(gameData, zoom, territoryVersion);
     drawHover();
+    dynamicLayerDirty = false;
+  }
+
+  function drawLabels() {
+    if (!gameData || !terrain) return;
+    TerriPlayerLabelRenderer.draw(gameData, zoom, territoryVersion);
+    labelsDirty = false;
+  }
+
+  function scheduleLabelDraw() {
+    labelsDirty = true;
+    if (labelDrawFrame !== null) return;
+    labelDrawFrame = requestAnimationFrame(() => {
+      labelDrawFrame = null;
+      if (gameData && terrain) drawLabels();
+    });
+  }
+
+  function invalidateDynamic() {
+    dynamicLayerDirty = true;
+  }
+
+  function draw() {
+    drawScene();
+    invalidateDynamic();
+    drawDynamic();
+    drawLabels();
   }
 
   function randomColor() {
@@ -657,12 +734,14 @@
     panY = event.clientY - dragStart.y;
     applyMapTransform();
     hoverPosition = positionFromPointer(event);
-    draw();
+    invalidateDynamic();
+    drawDynamic();
   });
 
   mapFrame.addEventListener('pointerleave', function () {
     hoverPosition = null;
-    draw();
+    invalidateDynamic();
+    drawDynamic();
   });
 
   function stopDragging(event) {
@@ -677,14 +756,16 @@
         if (!isValidCapital(position)) {
           spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
           hoverPosition = null;
-          draw();
+          invalidateDynamic();
+          drawDynamic();
           return;
         }
         selectedPosition = position;
         selectedColor = randomColor();
         spawnMessage.textContent = 'CAPITAL SELECTED // CLICK AGAIN TO REPLACE';
         spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
-        draw();
+        invalidateDynamic();
+        drawDynamic();
       }
     } else if (wasClick && activeGame) {
       const position = positionFromPointer(event);
@@ -695,7 +776,8 @@
       }
     }
     hoverPosition = null;
-    draw();
+    invalidateDynamic();
+    drawDynamic();
   }
 
   mapFrame.addEventListener('pointerup', stopDragging);
@@ -735,6 +817,7 @@
     },
     start(data) {
       stopRenderLoop();
+      const sessionId = ++gameSessionId;
       gameData = data;
       territoryVersion = 0;
       displayTroops = 0;
@@ -745,11 +828,16 @@
       gameData.owners = new Int32Array(data.map.width * data.map.height);
       terrain = null;
       expansionTimes = null;
-      loadTerrain(data.map).catch((error) => {
+      sceneDirty = true;
+      dynamicLayerDirty = true;
+      labelsDirty = true;
+      loadTerrain(data.map, sessionId).catch((error) => {
+        if (sessionId !== gameSessionId) return;
         console.error('Unable to load terrain map:', error);
         spawnMessage.textContent = 'MAP DATA UNAVAILABLE // REFRESH TO RETRY';
       });
-      loadExpansionTimes(data.map).catch((error) => {
+      loadExpansionTimes(data.map, sessionId).catch((error) => {
+        if (sessionId !== gameSessionId) return;
         console.warn('Expansion times unavailable; using server timing only:', error.message);
       });
       mapFrame.style.aspectRatio = `${data.map.width} / ${data.map.height}`;
@@ -780,6 +868,8 @@
       clearInterval(timerHandle);
       updateSpawnTimer();
       timerHandle = setInterval(updateSpawnTimer, 50);
+      invalidateDynamic();
+      drawDynamic();
     },
     confirmSpawn(data) {
       spawnMessage.textContent = 'CAPITAL CONFIRMED // GAME STARTING';
@@ -791,6 +881,7 @@
         const ownerId = Number(localPlayerId.replace('player-', ''));
         data.cells.forEach((cell) => { gameData.owners[cell] = ownerId; });
         territoryVersion += 1;
+        labelsDirty = true;
         updateTerritoryLayer([
           ...previousCells.map((position) => ({ position, owner: 0 })),
           ...data.cells.map((position) => ({ position, owner: ownerId }))
@@ -798,13 +889,16 @@
       }
       confirmedPosition = data.position;
       selectedPosition = data.position;
-      draw();
+      invalidateDynamic();
+      drawDynamic();
+      scheduleLabelDraw();
     },
     rejectSpawn(data) {
       selectionLocked = false;
       selectedPosition = confirmedPosition;
       spawnMessage.textContent = `SPAWN REJECTED // ${data.reason}`;
-      draw();
+      invalidateDynamic();
+      drawDynamic();
     },
     startActiveGame(data) {
       spawnPhase = null;
@@ -878,6 +972,7 @@
       }
       updateRatioDisplay();
       renderLeaderboard();
+      labelsDirty = true;
       if (!renderLoopRunning) draw();
     },
     rejectExpansion(data) {
@@ -885,7 +980,10 @@
       spawnMessage.textContent = `EXPANSION REJECTED // ${data.reason}`;
     },
     stop() {
+      gameSessionId += 1;
       stopRenderLoop();
+      spawnPhase = null;
+      activeGame = false;
     }
   };
 }());
