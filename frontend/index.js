@@ -3,12 +3,10 @@
 
   const nameInput = document.querySelector('#player-name');
   const launchForm = document.querySelector('#launch-form');
-  const rerollButton = document.querySelector('#reroll-name');
   const status = document.querySelector('#launch-status');
   const homeScreen = document.querySelector('.home-screen');
   const gameScreen = document.querySelector('#game-screen');
   const quitButton = document.querySelector('#quit-button');
-  const liveClock = document.querySelector('#live-clock');
   const powerSlider = document.querySelector('#power-slider');
   const PROTOCOL = window.TerriBinaryProtocol;
   const OP = PROTOCOL.OP;
@@ -19,28 +17,7 @@
     return namePool[Math.floor(Math.random() * namePool.length)];
   }
 
-  function setRandomName() {
-    nameInput.value = randomName();
-    nameInput.select();
-  }
-
-  let namePreviewIndex = 0;
-  nameInput.value = namePool[namePreviewIndex];
-  const namePreviewTimer = setInterval(function () {
-    if (document.activeElement === nameInput || nameInput.value !== namePool[namePreviewIndex]) {
-      clearInterval(namePreviewTimer);
-      return;
-    }
-    namePreviewIndex = (namePreviewIndex + 1) % namePool.length;
-    nameInput.value = namePool[namePreviewIndex];
-  }, 360);
-  rerollButton.addEventListener('click', setRandomName);
-
-  function updateClock() {
-    liveClock.textContent = new Date().toLocaleTimeString();
-  }
-  updateClock();
-  setInterval(updateClock, 1000);
+  nameInput.value = randomName();
 
   TerriCommunicator.on(OP.GAME_ACCEPTED, function (message) {
     homeScreen.hidden = true;

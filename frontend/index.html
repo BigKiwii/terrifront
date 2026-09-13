@@ -7,55 +7,29 @@
   <title>Terrifront</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=New+Rocker&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="../Assets/logo.png">
   <link rel="stylesheet" href="index.css">
 </head>
 <body>
   <main class="home-screen">
-    <div class="map-wash" aria-hidden="true"></div>
-    <div class="map-glow" aria-hidden="true"></div>
-    <div class="scanlines" aria-hidden="true"></div>
-
-    <header class="top-bar">
-      <div class="utility-stack">
-        <div class="utility-chip"><span class="chip-dot"></span> TERRIFRONT NETWORK</div>
-        <div class="utility-chip muted">SECTOR 07 / EUROPE - ASIA</div>
-      </div>
-      <div class="clock"><span id="live-clock"></span></div>
-    </header>
+    <div class="logo-wash" aria-hidden="true"></div>
+    <div class="logo-tint" aria-hidden="true"></div>
 
     <section class="hero" aria-labelledby="game-title">
-      <div class="title-lockup">
-        <span class="flag-mark" aria-hidden="true">+</span>
-        <h1 id="game-title">TERRI<span>FRONT</span></h1>
-        <span class="flag-mark" aria-hidden="true">+</span>
-      </div>
-      <p class="tagline">THE WORLD IS YOURS TO TAKE</p>
-
-      <div class="map-preview" aria-label="Live Europe Asia map preview">
-        <span>LIVE MAP</span>
-        <strong>EUROPE // ASIA</strong>
-        <small>LANDS AWAITING COMMAND</small>
-      </div>
+      <h1 id="game-title">TERRI<span>FRONT</span></h1>
 
       <form class="launch-panel" id="launch-form">
         <div class="name-row">
           <label class="sr-only" for="player-name">Player name</label>
           <input id="player-name" name="playerName" type="text" maxlength="24" autocomplete="nickname" spellcheck="false" required>
-          <button type="button" class="reroll-button" id="reroll-name" aria-label="Generate a new player name" title="Generate a new player name">↻</button>
         </div>
         <button class="play-button" type="submit">
-          <span class="button-icon" aria-hidden="true">⚔</span>
           <span>PLAY</span>
-          <span class="button-icon" aria-hidden="true">⚔</span>
         </button>
         <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
       </form>
     </section>
-
-    <footer class="footer-bar">
-      <div class="footer-meta"><span class="signal-dot"></span> BUILD 0.1.0 <span>FRONTEND PREVIEW</span></div>
-    </footer>
   </main>
 
   <main class="game-screen" id="game-screen" hidden>
