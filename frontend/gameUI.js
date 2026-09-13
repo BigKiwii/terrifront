@@ -57,7 +57,7 @@
   let localPlayerWon = false;
   const TROOP_SMOOTHING_MS = 90;
   const LEADERBOARD_INTERVAL_MS = 250;
-  const PLAYER_FOCUS_ZOOM = 3.6;
+  const PLAYER_FOCUS_ZOOM = 4;
   let pendingChanges = [];
   let pendingHead = 0;
   let drainRate = 0;
@@ -230,22 +230,16 @@
   }
 
   function focusPlayer(playerId) {
-    if (!gameData || eliminationAnimationFrame) return;
+    if (!gameData) return;
     const target = TerriPlayerLabelRenderer.getLabelCenter(playerId, gameData, territoryVersion);
     if (!target) return;
     const mapWidth = gameData.map.width;
     const mapHeight = gameData.map.height;
     const targetZoom = PLAYER_FOCUS_ZOOM;
-    const viewportCenterX = window.innerWidth / 2;
-    const viewportCenterY = window.innerHeight / 2;
-    const currentBounds = mapFrame.getBoundingClientRect();
-    const targetScreenX = currentBounds.left + target.x / mapWidth * currentBounds.width;
-    const targetScreenY = currentBounds.top + target.y / mapHeight * currentBounds.height;
-    const zoomRatio = targetZoom / zoom;
-    const scaledTargetX = viewportCenterX + (targetScreenX - viewportCenterX) * zoomRatio;
-    const scaledTargetY = viewportCenterY + (targetScreenY - viewportCenterY) * zoomRatio;
-    const targetPanX = panX + viewportCenterX - scaledTargetX;
-    const targetPanY = panY + viewportCenterY - scaledTargetY;
+    const targetOffsetX = canvas.offsetLeft + target.x / mapWidth * canvas.offsetWidth - mapFrame.offsetWidth / 2;
+    const targetOffsetY = canvas.offsetTop + target.y / mapHeight * canvas.offsetHeight - mapFrame.offsetHeight / 2;
+    const targetPanX = -targetOffsetX * targetZoom;
+    const targetPanY = -targetOffsetY * targetZoom;
     const startZoom = zoom;
     const startPanX = panX;
     const startPanY = panY;
