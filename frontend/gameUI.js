@@ -615,7 +615,8 @@
     const remainingMs = Math.max(0, spawnPhase.deadline - Date.now());
     const remainingSeconds = Math.ceil(remainingMs / 1000);
     spawnTime.textContent = remainingSeconds;
-    progressBar.style.width = `${Math.max(0, remainingMs / spawnPhase.durationMs) * 100}%`;
+    const elapsedMs = Math.min(spawnPhase.durationMs, spawnPhase.durationMs - remainingMs);
+    progressBar.style.width = `${Math.max(0, elapsedMs / spawnPhase.durationMs) * 100}%`;
     progressBar.classList.toggle('is-critical', remainingMs <= 5000);
     if (remainingMs <= 1000 && !selectionLocked) {
       selectionLocked = true;

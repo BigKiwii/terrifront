@@ -165,7 +165,7 @@ h1 span { color: var(--cyan); }
 .quit-button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
 .cancel-button { position: absolute; z-index: 7; bottom: 70px; left: 50%; transform: translateX(-50%); border: 1px solid #e63946; padding: 5px 16px; color: #e63946; background: rgba(7, 18, 33, 0.9); font-family: var(--data-font); font-size: 9px; letter-spacing: 0.1em; cursor: pointer; }
 .cancel-button[hidden] { display: none; }
-.troop-display { position: absolute; z-index: 6; top: 14px; left: 50%; min-width: 180px; transform: translateX(-50%); display: grid; gap: 2px; border: 1px solid rgba(244, 243, 234, 0.9); padding: 7px 18px; color: var(--paper); background: rgba(7, 18, 33, 0.88); box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45); font-family: var(--data-font); font-size: 11px; letter-spacing: 0.04em; text-align: center; }
+.troop-display { position: absolute; z-index: 6; right: 14px; bottom: 14px; min-width: 180px; display: grid; gap: 2px; border: 1px solid rgba(244, 243, 234, 0.9); padding: 7px 18px; color: var(--paper); background: rgba(7, 18, 33, 0.88); box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45); font-family: var(--data-font); font-size: 11px; letter-spacing: 0.04em; text-align: center; }
 .troop-display strong { color: var(--cyan); font-size: 16px; }
 .troop-display.is-attacking { border-color: #e63946; animation: attack-pulse 0.8s ease-in-out infinite alternate; }
 .troop-display span span { color: var(--paper); }
@@ -186,14 +186,14 @@ h1 span { color: var(--cyan); }
 .map-frame { width: min(70vw, 760px); aspect-ratio: 16 / 9; padding: 3px; background: #19195f; border: 1px solid rgba(235, 235, 235, 0.72); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.62), 0 7px 18px rgba(0, 0, 0, 0.42); cursor: pointer; touch-action: none; transform-origin: center; will-change: transform; }
 .map-frame.is-dragging { cursor: grabbing; }
 .game-screen canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
-.spawn-hud { position: absolute; z-index: 4; top: 18px; left: 50%; width: min(520px, 72vw); transform: translateX(-50%); color: #f4f3ea; text-align: center; text-shadow: 1px 1px 0 #111; }
+.spawn-hud { position: absolute; z-index: 7; top: 0; right: 0; left: 0; width: 100%; height: 6px; color: #f4f3ea; text-align: center; text-shadow: 1px 1px 0 #111; }
 .spawn-hud[hidden] { display: none; }
-.spawn-hud-label { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 11px; letter-spacing: 0.12em; }
+.spawn-hud-label { display: none; }
 .spawn-hud-label strong { color: #dfe95c; font-size: 16px; }
-.spawn-progress { height: 8px; border: 1px solid rgba(244, 243, 234, 0.8); padding: 1px; background: rgba(12, 18, 20, 0.78); }
-.spawn-progress span { display: block; width: 100%; height: 100%; background: #69c878; transition: width 80ms linear, background 150ms ease; }
-.spawn-progress span.is-critical { background: #e86b52; }
-.spawn-hud p { margin: 7px 0 0; color: #f4f3ea; font-size: 9px; letter-spacing: 0.1em; }
+.spawn-progress { width: 100%; height: 100%; border: 0; padding: 0; background: rgba(12, 18, 20, 0.78); }
+.spawn-progress span { display: block; width: 100%; height: 100%; border-radius: 0 999px 999px 0; background: #f4d35e; transition: width 80ms linear, background 150ms ease; }
+.spawn-progress span.is-critical { background: #ffe37a; }
+.spawn-hud p { display: none; }
 @keyframes attack-pulse { from { box-shadow: 0 0 0 rgba(230, 57, 70, 0); } to { box-shadow: 0 0 12px rgba(230, 57, 70, 0.6); } }
 
 @media (max-width: 700px) {
