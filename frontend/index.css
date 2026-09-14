@@ -233,7 +233,16 @@ h1 span { color: var(--cyan); }
 
 @media (max-width: 700px) {
   .map-frame { width: min(88vw, 620px); }
-  .leaderboard { top: auto; bottom: 10px; left: 10px; width: 190px; }
+  .leaderboard { top: 8px; right: 8px; bottom: auto; left: 8px; width: auto; max-width: none; font-size: 10px; }
+  .leaderboard-title { display: flex; align-items: center; justify-content: space-between; padding: 6px 8px; font-size: 9px; }
+  .leaderboard-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 25vh; overflow-y: auto; }
+  .leaderboard-row { min-width: 0; height: 30px; gap: 5px; padding: 4px 6px; }
+  .leaderboard-rank { width: 12px; }
+  .leaderboard-swatch { width: 8px; height: 8px; }
+  .leaderboard-values { font-size: 8px; }
+  .leaderboard-name { font-size: 9px; }
+  .troop-display { right: 8px; bottom: 8px; left: 8px; min-width: 0; }
+  .attack-ratio-panel { bottom: 68px; width: min(300px, calc(100vw - 24px)); }
   .winner-banner { right: 14px; bottom: 18px; left: 14px; min-height: 92px; }
 }
 

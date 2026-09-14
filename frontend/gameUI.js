@@ -36,6 +36,8 @@
   let panY = 0;
   let dragStart = null;
   let dragMoved = false;
+  const activePointers = new Map();
+  let pinchState = null;
   let spawnPhase = null;
   let selectedPosition = null;
   let selectedColor = '#69c878';
@@ -43,7 +45,6 @@
   let timerHandle = null;
   let terrain = null;
   let expansionTimes = null;
-  let spawnPoints = new Set();
   let selectionLocked = false;
   let localPlayerId = null;
   let activeGame = false;
@@ -55,6 +56,7 @@
   let playerColors = new Map();
   let playerColorCache = new Map();
   let localCapitalCells = new Set();
+  let selectedSpawnCells = [];
   let confirmedPosition = null;
   let currentPower = 500;
   let territoryVersion = 0;
@@ -176,9 +178,11 @@
     lastFrameAt = timestamp;
     drainPendingChanges(deltaMs);
     smoothTroops(deltaMs);
-    drawScene();
-    drawDynamic();
-    if (labelsDirty && (labelsCameraDirty || performance.now() - lastLabelDrawAt >= LABEL_UPDATE_INTERVAL_MS)) drawLabels();
+    if (sceneDirty) drawScene();
+    if (dynamicLayerDirty) drawDynamic();
+    if (labelsDirty && (labelsCameraDirty || performance.now() - lastLabelDrawAt >= LABEL_UPDATE_INTERVAL_MS)) {
+      drawLabels();
+    }
     requestAnimationFrame(renderFrame);
   }
 
@@ -324,22 +328,41 @@
     });
   }
 
-  function drawCapital(position, color) {
-    if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return;
-    const centerX = position % gameData.map.width;
-    const centerY = Math.floor(position / gameData.map.width);
-    const colors = warFrontPlayerColors(color);
-    dynamicContext.save();
-    dynamicContext.lineWidth = 1;
-    dynamicContext.fillStyle = colors.territory;
-    dynamicContext.strokeStyle = colors.border;
-    dynamicContext.lineWidth = 1;
-    for (let y = -2; y <= 2; y += 1) {
-      for (let x = -2; x <= 2; x += 1) {
-        if (Math.abs(x) === 2 && Math.abs(y) === 2) continue;
-        dynamicContext.fillRect(centerX + x, centerY + y, 1, 1);
-        dynamicContext.strokeRect(centerX + x, centerY + y, 1, 1);
+  function getCapitalCells(position) {
+    if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return [];
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    const centerX = position % width;
+    const centerY = Math.floor(position / width);
+    const cells = [];
+    for (let y = centerY - 2; y <= centerY + 2; y += 1) {
+      for (let x = centerX - 2; x <= centerX + 2; x += 1) {
+        if (x < 0 || x >= width || y < 0 || y >= height) return [];
+        if (Math.abs(x - centerX) === 2 && Math.abs(y - centerY) === 2) continue;
+        cells.push(y * width + x);
       }
+    }
+    return cells;
+  }
+
+  function drawCapital(position, color, cells = null) {
+    if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return;
+    const width = gameData.map.width;
+    const shape = Array.isArray(cells) && cells.length ? cells : getCapitalCells(position);
+    if (!shape.length) return;
+    const colors = warFrontPlayerColors(color || '#69c878');
+    const cellSet = new Set(shape);
+    dynamicContext.save();
+    for (const cell of shape) {
+      const x = cell % width;
+      const y = Math.floor(cell / width);
+      const hasEast = cellSet.has(x + 1 < width ? cell + 1 : -1);
+      const hasWest = cellSet.has(x - 1 >= 0 ? cell - 1 : -1);
+      const hasNorth = cellSet.has(y - 1 >= 0 ? cell - width : -1);
+      const hasSouth = cellSet.has(y + 1 < gameData.map.height ? cell + width : -1);
+      const isBorderTile = !hasEast || !hasWest || !hasNorth || !hasSouth;
+      dynamicContext.fillStyle = isBorderTile ? colors.border : colors.territory;
+      dynamicContext.fillRect(x, y, 1, 1);
     }
     dynamicContext.restore();
   }
@@ -357,7 +380,6 @@
       if (sessionId !== gameSessionId) return;
       terrain = decodedTerrain;
       buildTerrainLayer();
-      refreshSpawnPoints();
       draw();
       return;
     }
@@ -370,14 +392,7 @@
     if (sessionId !== gameSessionId) return;
     terrain = loadedTerrain;
     buildTerrainLayer();
-    refreshSpawnPoints();
     draw();
-  }
-
-  function refreshSpawnPoints() {
-    if (!spawnPhase || !terrain) return;
-    spawnPoints = new Set([...spawnPoints].filter((position) => isValidCapital(position)));
-    invalidateDynamic();
   }
 
   async function loadExpansionTimes(mapData, sessionId) {
@@ -406,7 +421,8 @@
       for (let x = centerX - 2; x <= centerX + 2; x += 1) {
         if (x < 0 || x >= gameData.map.width || y < 0 || y >= gameData.map.height) return false;
         if (Math.abs(x - centerX) === 2 && Math.abs(y - centerY) === 2) continue;
-        if ((terrain[y * gameData.map.width + x] & 0x80) === 0) return false;
+        const cell = y * gameData.map.width + x;
+        if ((terrain[cell] & 0x80) === 0 || gameData.owners[cell] !== 0) return false;
       }
     }
     return true;
@@ -564,31 +580,27 @@
   }
 
   function drawHover() {
-    if (hoverPosition === null || !spawnPhase || selectionLocked || !isValidCapital(hoverPosition)) return;
-    const x = hoverPosition % gameData.map.width;
-    const y = Math.floor(hoverPosition / gameData.map.width);
+    if (hoverPosition === null || selectedPosition !== null || !spawnPhase || selectionLocked || !isValidCapital(hoverPosition)) return;
+    const width = gameData.map.width;
+    const shape = getCapitalCells(hoverPosition);
+    const cellSet = new Set(shape);
     dynamicContext.save();
     dynamicContext.strokeStyle = '#f4d35e';
     dynamicContext.lineWidth = 1;
     dynamicContext.globalAlpha = 0.9;
-    dynamicContext.strokeRect(x - 2.5, y - 2.5, 6, 6);
-    dynamicContext.restore();
-  }
-
-  function drawSpawnPoints() {
-    if (!spawnPhase || spawnPoints.size === 0) return;
-    dynamicContext.save();
-    dynamicContext.fillStyle = 'rgba(154, 162, 166, 0.9)';
-    dynamicContext.globalAlpha = 0.9;
-    for (const position of spawnPoints) {
-      const centerX = position % gameData.map.width;
-      const centerY = Math.floor(position / gameData.map.width);
-      for (let y = -2; y <= 2; y += 1) {
-        for (let x = -2; x <= 2; x += 1) {
-          if (Math.abs(x) === 2 && Math.abs(y) === 2) continue;
-          dynamicContext.fillRect(centerX + x, centerY + y, 1, 1);
-        }
-      }
+    for (const cell of shape) {
+      const x = cell % width;
+      const y = Math.floor(cell / width);
+      const hasEast = cellSet.has(cell + 1);
+      const hasWest = cellSet.has(cell - 1);
+      const hasNorth = cellSet.has(cell - width);
+      const hasSouth = cellSet.has(cell + width);
+      dynamicContext.beginPath();
+      if (!hasNorth) { dynamicContext.moveTo(x, y); dynamicContext.lineTo(x + 1, y); }
+      if (!hasEast) { dynamicContext.moveTo(x + 1, y); dynamicContext.lineTo(x + 1, y + 1); }
+      if (!hasSouth) { dynamicContext.moveTo(x + 1, y + 1); dynamicContext.lineTo(x, y + 1); }
+      if (!hasWest) { dynamicContext.moveTo(x, y + 1); dynamicContext.lineTo(x, y); }
+      dynamicContext.stroke();
     }
     dynamicContext.restore();
   }
@@ -672,18 +684,20 @@
     const width = gameData.map.width;
     const height = gameData.map.height;
     dynamicContext.clearRect(0, 0, width, height);
-    drawSpawnPoints();
-    if (spawnPhase && gameData.players) {
-      for (const player of gameData.players) {
-        if (player.spawnPosition == null || !player.capitalColor) continue;
-        if (player.playerId === localPlayerId) continue;
-        drawCapital(player.spawnPosition, player.capitalColor);
-      }
-    }
-    if (spawnPhase && selectedPosition !== null) drawCapital(selectedPosition, selectedColor);
+    if (spawnPhase) drawSpawnCapitals();
     drawBoats();
     drawHover();
     dynamicLayerDirty = false;
+  }
+
+  function drawSpawnCapitals() {
+    const localPreviewActive = selectedPosition !== null;
+    for (const player of gameData.players || []) {
+      if (!Number.isInteger(player.spawnPosition)) continue;
+      if (player.playerId === localPlayerId && localPreviewActive) continue;
+      drawCapital(player.spawnPosition, player.capitalColor || playerColors.get(Number(player.playerId.replace('player-', ''))));
+    }
+    if (localPreviewActive) drawCapital(selectedPosition, selectedColor);
   }
 
   // Troops at sea, drawn as a small marker in the owner's colour.
@@ -774,13 +788,42 @@
       return;
     }
     event.preventDefault();
-    zoom = clamp(zoom * (event.deltaY > 0 ? 0.9 : 1.1), 0.1, 200);
+    const rectangle = mapFrame.getBoundingClientRect();
+    const visualCenterX = rectangle.left + rectangle.width / 2;
+    const visualCenterY = rectangle.top + rectangle.height / 2;
+    const localX = (event.clientX - visualCenterX) / zoom;
+    const localY = (event.clientY - visualCenterY) / zoom;
+    const nextZoom = clamp(zoom * (event.deltaY > 0 ? 0.9 : 1.1), 1, 200);
+    const baseCenterX = visualCenterX - panX;
+    const baseCenterY = visualCenterY - panY;
+    zoom = nextZoom;
+    panX = event.clientX - localX * zoom - baseCenterX;
+    panY = event.clientY - localY * zoom - baseCenterY;
     applyMapTransform();
   }, { passive: false });
 
   mapFrame.addEventListener('pointerdown', function (event) {
-    if (event.button !== 0) return;
     if (eliminationAnimationFrame) return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (activePointers.size === 2) {
+      const points = [...activePointers.values()];
+      pinchState = {
+        distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y),
+        zoom,
+        panX,
+        panY,
+        midpoint: {
+          x: (points[0].x + points[1].x) / 2,
+          y: (points[0].y + points[1].y) / 2
+        }
+      };
+      dragStart = null;
+      dragMoved = true;
+      mapFrame.classList.remove('is-dragging');
+      mapFrame.setPointerCapture(event.pointerId);
+      return;
+    }
     dragStart = { x: event.clientX - panX, y: event.clientY - panY };
     dragMoved = false;
     mapFrame.setPointerCapture(event.pointerId);
@@ -788,6 +831,23 @@
   });
 
   mapFrame.addEventListener('pointermove', function (event) {
+    if (activePointers.has(event.pointerId)) activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pinchState && activePointers.size >= 2) {
+      const points = [...activePointers.values()];
+      const distance = Math.max(1, Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y));
+      const midpoint = {
+        x: (points[0].x + points[1].x) / 2,
+        y: (points[0].y + points[1].y) / 2
+      };
+      const scale = clamp(distance / pinchState.distance, 0.35, 4);
+      zoom = clamp(pinchState.zoom * scale, 1, 200);
+      panX = pinchState.panX + midpoint.x - pinchState.midpoint.x;
+      panY = pinchState.panY + midpoint.y - pinchState.midpoint.y;
+      applyMapTransform();
+      invalidateDynamic();
+      drawDynamic();
+      return;
+    }
     if (!dragStart) return;
     if (Math.abs(event.clientX - dragStart.x - panX) > 6 || Math.abs(event.clientY - dragStart.y - panY) > 6) dragMoved = true;
     panX = event.clientX - dragStart.x;
@@ -805,6 +865,13 @@
   });
 
   function stopDragging(event) {
+    activePointers.delete(event.pointerId);
+    if (pinchState) {
+      if (activePointers.size < 2) pinchState = null;
+      dragStart = null;
+      if (mapFrame.hasPointerCapture(event.pointerId)) mapFrame.releasePointerCapture(event.pointerId);
+      return;
+    }
     if (!dragStart) return;
     const wasClick = !dragMoved;
     dragStart = null;
@@ -821,7 +888,16 @@
           return;
         }
         selectedPosition = position;
-        selectedColor = randomColor();
+        selectedSpawnCells = getCapitalCells(position);
+        if (selectedSpawnCells.length !== 21 || !isValidCapital(position)) {
+          selectedSpawnCells = [];
+          spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
+          hoverPosition = null;
+          invalidateDynamic();
+          drawDynamic();
+          return;
+        }
+        selectedColor = playerColors.get(Number(localPlayerId.replace('player-', ''))) || randomColor();
         spawnMessage.textContent = 'CAPITAL SELECTED // CLICK AGAIN TO REPLACE';
         spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
         invalidateDynamic();
@@ -1011,10 +1087,13 @@
       });
       mapFrame.style.aspectRatio = `${data.map.width} / ${data.map.height}`;
       selectedPosition = null;
+      selectedSpawnCells = [];
       confirmedPosition = null;
       localCapitalCells = new Set();
+      selectedSpawnCells = [];
       hoverPosition = null;
       playerColors = new Map();
+      selectedColor = playerColors.get(Number(localPlayerId.replace('player-', ''))) || '#69c878';
       spawnPhase = null;
       selectionLocked = false;
       localPlayerEliminated = false;
@@ -1037,8 +1116,13 @@
         rebuildPlayerMap();
         for (const player of data.players) {
           const ownerId = Number(player.playerId.replace('player-', ''));
-          if (player.capitalColor) playerColors.set(ownerId, player.capitalColor);
+          if (player.capitalColor) {
+            playerColors.set(ownerId, player.capitalColor);
+            if (player.playerId === localPlayerId) selectedColor = player.capitalColor;
+          }
         }
+        const localOwnerId = Number(localPlayerId.replace('player-', ''));
+        if (!selectedColor || selectedColor === '#8b9298') selectedColor = playerColors.get(localOwnerId) || '#69c878';
       }
       if (data.changes?.length) {
         for (const change of data.changes) gameData.owners[change.position] = change.owner;
@@ -1046,8 +1130,7 @@
         territoryVersion += 1;
         labelsDirty = true;
       }
-      spawnPoints = new Set(data.spawnPoints || []);
-      refreshSpawnPoints();
+      selectedSpawnCells = [];
       selectionLocked = false;
       spawnHud.hidden = false;
       spawnMessage.textContent = 'CHOOSE A LAND POSITION FOR YOUR CAPITAL';
@@ -1055,7 +1138,7 @@
       updateSpawnTimer();
       timerHandle = setInterval(updateSpawnTimer, 50);
       invalidateDynamic();
-      drawDynamic();
+      draw();
     },
     confirmSpawn(data) {
       const confirmedPlayerId = data.playerId || localPlayerId;
@@ -1073,8 +1156,13 @@
         player.capitalColor = data.color;
         player.isAlive = true;
       }
+      if (data.color) {
+        playerColors.set(confirmedOwnerId, data.color);
+        if (confirmedPlayerId === localPlayerId) selectedColor = data.color;
+      }
       if (isLocalPlayer) localCapitalCells = new Set(data.cells || []);
       if (data.cells) {
+        if (isLocalPlayer) selectedSpawnCells = [...data.cells];
         data.cells.forEach((cell) => { gameData.owners[cell] = confirmedOwnerId; });
         territoryVersion += 1;
         labelsDirty = true;
@@ -1085,11 +1173,10 @@
       }
       if (isLocalPlayer) {
         confirmedPosition = data.position;
-        selectedPosition = data.position;
+        selectedPosition = null;
       }
       invalidateDynamic();
-      drawDynamic();
-      scheduleLabelDraw();
+      draw();
     },
     rejectSpawn(data) {
       selectionLocked = false;

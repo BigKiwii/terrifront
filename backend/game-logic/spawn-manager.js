@@ -93,8 +93,7 @@ class SpawnManager {
 
   select(playerId, position) {
     const cells = this.map.getCapitalCells(position);
-    const freeCells = cells.filter((cell) => this.map.isLand(cell) && this.map.owners[cell] === 0);
-    if (freeCells.length < 10) {
+    if (cells.length !== 21 || !cells.every((cell) => this.map.isLand(cell) && this.map.owners[cell] === 0)) {
       return { accepted: false, reason: 'INVALID_SPAWN_LOCATION' };
     }
 
@@ -104,7 +103,7 @@ class SpawnManager {
       Math.abs(Math.floor(candidate / this.map.width) - Math.floor(position / this.map.width)) <= 4);
     this.available = this.available.filter((candidate) => !nearby.includes(candidate));
     this.reservations.set(playerId, { position, blocked: nearby });
-    return { accepted: true, position, cells: freeCells };
+    return { accepted: true, position, cells };
   }
 
   release(playerId) {

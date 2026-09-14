@@ -8,6 +8,7 @@
   let labelContext = null;
   let mapCanvas = null;
   let mapBounds = null;
+  let lastDrawState = null;
   const MIN_LABEL_PIXELS = 7;
 
   function formatTroops(value) {
@@ -100,12 +101,12 @@
     resizeLabelCanvas();
     window.addEventListener('resize', () => {
       mapBounds = null;
+      lastDrawState = null;
       resizeLabelCanvas();
     });
   }
 
-  function draw(gameData, zoom, territoryVersion = 0) {
-    if (!labelContext || !mapCanvas || !gameData?.owners || !gameData.players) return;
+  function resolveLabelLayout(gameData, territoryVersion) {
     const width = gameData.map.width;
     const height = gameData.map.height;
     if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion) {
@@ -121,18 +122,60 @@
       .sort((first, second) =>
         (second.territorySize || 0) - (first.territorySize || 0) ||
         (second.troops || 0) - (first.troops || 0))[0];
-    labelContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+
+    const entries = [];
     for (const player of gameData.players) {
       const ownerId = Number(player.playerId.replace('player-', ''));
       const square = cachedSquares.get(ownerId);
-      if (!square || Math.min(square.size * scaleX, square.size * scaleY) < MIN_LABEL_PIXELS) continue;
+      if (!square) continue;
+      const squarePixels = Math.min(square.size * scaleX, square.size * scaleY);
+      if (squarePixels < MIN_LABEL_PIXELS) continue;
       const screenX = mapBounds.left + square.x * scaleX;
       const screenY = mapBounds.top + square.y * scaleY;
       const screenWidth = square.size * scaleX;
       const screenHeight = square.size * scaleY;
-      if (screenX + screenWidth < 0 || screenX > window.innerWidth ||
-        screenY + screenHeight < 0 || screenY > window.innerHeight) continue;
-      const hasCrown = player.isWinner || player.playerId === biggestPlayer?.playerId;
+      const left = screenX + screenWidth;
+      const top = screenY + screenHeight;
+      if (left < 0 || screenX > window.innerWidth || top < 0 || screenY > window.innerHeight) continue;
+      entries.push({
+        player,
+        screenX,
+        screenY,
+        screenWidth,
+        screenHeight,
+        hasCrown: player.isWinner || player.playerId === biggestPlayer?.playerId
+      });
+    }
+    return entries;
+  }
+
+  function draw(gameData, zoom, territoryVersion = 0) {
+    if (!labelContext || !mapCanvas || !gameData?.owners || !gameData.players) return;
+
+    const bounds = mapCanvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    mapBounds = bounds;
+
+    const nextState = {
+      version: territoryVersion,
+      left: Math.round(bounds.left),
+      top: Math.round(bounds.top),
+      width: Math.round(bounds.width),
+      height: Math.round(bounds.height),
+      zoom: Number.isFinite(zoom) ? Number(zoom.toFixed(3)) : 1
+    };
+
+    const entries = resolveLabelLayout(gameData, territoryVersion);
+    const stateChanged = !lastDrawState || JSON.stringify(lastDrawState) !== JSON.stringify(nextState);
+    lastDrawState = nextState;
+
+    if (!stateChanged && entries.length === 0 && labelContext.canvas.width > 0) {
+      return;
+    }
+
+    labelContext.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    for (const entry of entries) {
+      const { player, screenX, screenY, screenWidth, screenHeight, hasCrown } = entry;
       if (hasCrown) drawCrown(labelContext, screenX, screenY, screenWidth, screenHeight);
       drawText(labelContext, player.playerName, screenX, screenY, screenWidth, screenHeight, true);
       drawText(labelContext, formatTroops(player.troops), screenX, screenY, screenWidth, screenHeight, false);
@@ -162,6 +205,7 @@
 
   function invalidateLayout() {
     mapBounds = null;
+    lastDrawState = null;
   }
 
   window.TerriPlayerLabelRenderer = { init, draw, getLabelCenter, invalidateLayout };
