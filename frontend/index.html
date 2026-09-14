@@ -32,6 +32,25 @@
     </section>
   </main>
 
+  <main class="lobby-screen" id="lobby-screen" hidden>
+    <div class="map-wash" aria-hidden="true"></div>
+    <div class="map-glow" aria-hidden="true"></div>
+    <div class="scanlines" aria-hidden="true"></div>
+    <section class="lobby-panel" aria-labelledby="lobby-title">
+      <h2 id="lobby-title">JOIN THE FRONT</h2>
+      <p class="lobby-id" id="lobby-id">LOBBY --</p>
+      <div class="lobby-countdown" id="lobby-countdown">00:30</div>
+      <div class="lobby-meter"><span id="lobby-meter-fill"></span></div>
+      <div class="lobby-stats">
+        <span>PLAYERS <strong id="lobby-player-count">0 / 250</strong></span>
+        <span>STATUS <strong id="lobby-status">OPEN</strong></span>
+      </div>
+      <div class="lobby-roster" id="lobby-roster" aria-live="polite"></div>
+      <button class="lobby-join-button" id="lobby-join-button" type="button">JOIN LOBBY</button>
+      <button class="lobby-leave-button" id="lobby-leave-button" type="button">LEAVE LOBBY</button>
+    </section>
+  </main>
+
   <main class="game-screen" id="game-screen" hidden>
     <button class="quit-button" id="quit-button" type="button">QUIT</button>
     <button class="cancel-button" id="cancel-button" hidden type="button">CANCEL x</button>

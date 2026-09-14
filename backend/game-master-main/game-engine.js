@@ -55,7 +55,7 @@ class GameEngine {
   startSpawnPhase(durationMs = 30000) {
     this.phase = 'SPAWNING';
     this.spawnDeadline = Date.now() + durationMs;
-    const maxPlayers = Math.min(500, Math.max(8, this.players.size + BOT_COUNT));
+    const maxPlayers = Math.min(500, Math.max(8, BOT_COUNT));
     this.spawnManager.initialize(maxPlayers);
     return {
       gameId: this.gameId,
@@ -92,9 +92,10 @@ class GameEngine {
     if (Date.now() > this.spawnDeadline + 1000) return { accepted: false, reason: 'SPAWN_DEADLINE_PASSED' };
     if (!Number.isInteger(position)) return { accepted: false, reason: 'INVALID_POSITION' };
 
+    const previousCells = [...player.spawnCells];
     const selected = this.selectSpawn(playerId, position);
     if (!selected.accepted) return selected;
-    return { accepted: true, playerId, position, color: player.capitalColor, cells: selected.cells };
+    return { accepted: true, playerId, position, color: player.capitalColor, clearedCells: previousCells, cells: selected.cells };
   }
 
   selectSpawn(playerId, position) {
@@ -127,6 +128,7 @@ class GameEngine {
   }
 
   createPlayerColor(playerId) {
+    if (this.players.get(playerId)?.isBot) return '#8b9298';
     const palette = [
       '#69c878', '#e86b52', '#6ba8e8', '#d9b84c',
       '#bb75d4', '#e889b1', '#55c5b5', '#e59b4f'

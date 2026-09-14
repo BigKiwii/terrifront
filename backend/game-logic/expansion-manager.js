@@ -217,6 +217,13 @@ class ExpansionManager {
     }
     return count;
   }
+
+  hasActiveTarget(playerId, targetOwnerId) {
+    for (const attack of this.attacks.values()) {
+      if (attack.playerId === playerId && attack.targetOwnerId === targetOwnerId) return true;
+    }
+    return false;
+  }
 }
 
 module.exports = ExpansionManager;

@@ -8,11 +8,16 @@ const OP = Object.freeze({
   GAME_UPDATE: 0x07,
   EXPANSION_REJECTED: 0x08,
   BOAT_REJECTED: 0x09,
+  LOBBY_STATE: 0x0a,
+  LOBBY_REJECTED: 0x0b,
   REQUEST_GAME: 0x10,
   SPAWN_POSITION: 0x11,
   EXPANSION_REQUEST: 0x12,
   CANCEL_EXPANSION: 0x13,
-  BOAT_REQUEST: 0x14
+  BOAT_REQUEST: 0x14,
+  LEAVE_LOBBY: 0x15,
+  REQUEST_LOBBY: 0x16,
+  JOIN_LOBBY: 0x17
 });
 
 const REASON = Object.freeze({
@@ -33,7 +38,9 @@ const REASON = Object.freeze({
   NO_BORDER_TERRITORY: 14,
   NOT_ENOUGH_TROOPS: 15,
   EXPANSION_NOT_FOUND: 16,
-  NO_WATER_ROUTE: 17
+  NO_WATER_ROUTE: 17,
+  LOBBY_FULL: 18,
+  SESSION_ACTIVE: 19
 });
 
 const REASON_NAMES = Object.keys(REASON);
@@ -197,22 +204,47 @@ function encodeGameAccepted(game) {
   return writer.finish();
 }
 
-function encodeSpawnPhaseStarted(playerId, phase) {
-  const writer = new BinaryWriter(32 + phase.spawnPoints.length * 4);
+function encodeLobbyState(state, playerId) {
+  const writer = new BinaryWriter(128 + state.players.length * 32);
+  writer.u8(OP.LOBBY_STATE);
+  writer.string(state.lobbyId);
+  writer.string(playerId || '');
+  writer.u32(Math.max(0, state.deadline - Date.now()));
+  writer.u16(state.players.length);
+  writer.u16(state.maxPlayers);
+  for (const player of state.players) {
+    writer.u16(playerNumber(player.playerId));
+    writer.string(player.playerName);
+    writer.u8(player.ready ? 1 : 0);
+  }
+  return writer.finish();
+}
+
+function encodeSpawnPhaseStarted(playerId, phase, state = null) {
+  const ownedCells = state
+    ? Array.from(state.owners || [], (owner, position) => ({ position, owner })).filter((change) => change.owner !== 0)
+    : [];
+  const writer = new BinaryWriter(32 + phase.spawnPoints.length * 4 + ownedCells.length * 6);
   writer.u8(OP.SPAWN_PHASE_STARTED);
   writer.string(playerId);
   writer.u32(Math.max(0, phase.deadline - Date.now()));
   writer.u32(phase.durationMs);
   writer.u32(phase.spawnPoints.length);
   for (const point of phase.spawnPoints) writer.u32(point);
+  writer.u16(state?.players?.length || 0);
+  for (const player of state?.players || []) writePlayer(writer, player, true);
+  writeChanges(writer, ownedCells);
   return writer.finish();
 }
 
 function encodeSpawnConfirmed(result) {
-  const writer = new BinaryWriter(32 + result.cells.length * 4);
+  const writer = new BinaryWriter(32 + result.cells.length * 4 + (result.clearedCells?.length || 0) * 4);
   writer.u8(OP.SPAWN_CONFIRMED);
+  writer.string(result.playerId || '');
   writer.u32(result.position);
   writer.color(result.color);
+  writer.u32(result.clearedCells?.length || 0);
+  for (const cell of result.clearedCells || []) writer.u32(cell);
   writer.u32(result.cells.length);
   for (const cell of result.cells) writer.u32(cell);
   return writer.finish();
@@ -285,18 +317,40 @@ function decodeServerMessage(value) {
     const durationMs = reader.u32();
     const spawnPoints = [];
     for (let index = 0, count = reader.u32(); index < count; index += 1) spawnPoints.push(reader.u32());
-    return { opcode, payload: { playerId, deadline, durationMs, spawnPoints } };
+    const players = [];
+    for (let index = 0, count = reader.u16(); index < count; index += 1) players.push(readPlayer(reader, true));
+    const changes = readChanges(reader);
+    return { opcode, payload: { playerId, deadline, durationMs, spawnPoints, players, changes } };
   }
   if (opcode === OP.SPAWN_CONFIRMED) {
+    const confirmedPlayerId = reader.string();
     const position = reader.u32();
     const color = reader.color();
+    const clearedCells = [];
+    for (let index = 0, count = reader.u32(); index < count; index += 1) clearedCells.push(reader.u32());
     const cells = [];
     for (let index = 0, count = reader.u32(); index < count; index += 1) cells.push(reader.u32());
-    return { opcode, payload: { accepted: true, position, color, cells } };
+    return { opcode, payload: { accepted: true, playerId: confirmedPlayerId, position, color, clearedCells, cells } };
   }
-  if (opcode === OP.GAME_REJECTED || opcode === OP.SPAWN_REJECTED || opcode === OP.EXPANSION_REJECTED || opcode === OP.BOAT_REJECTED) {
+  if (opcode === OP.GAME_REJECTED || opcode === OP.SPAWN_REJECTED || opcode === OP.EXPANSION_REJECTED || opcode === OP.BOAT_REJECTED || opcode === OP.LOBBY_REJECTED) {
     const reason = REASON_NAMES[reader.u8()] || 'INVALID_GAME_REQUEST';
     return { opcode, payload: { reason } };
+  }
+  if (opcode === OP.LOBBY_STATE) {
+    const lobbyId = reader.string();
+    const playerId = reader.string();
+    const deadline = Date.now() + reader.u32();
+    const players = [];
+    const count = reader.u16();
+    const maxPlayers = reader.u16();
+    for (let index = 0; index < count; index += 1) {
+      players.push({
+        playerId: `player-${reader.u16()}`,
+        playerName: reader.string(),
+        ready: Boolean(reader.u8())
+      });
+    }
+    return { opcode, payload: { lobbyId, playerId, deadline, players, maxPlayers } };
   }
   if (opcode === OP.GAME_STARTED) {
     const players = [];
@@ -326,21 +380,24 @@ function decodeServerMessage(value) {
 
 function decodeClientMessage(value) {
   const reader = new BinaryReader(value);
+  if (reader.buffer.length === 1 && reader.buffer[0] === OP.REQUEST_LOBBY) return { opcode: OP.REQUEST_LOBBY };
   const opcode = reader.u8();
   if (opcode === OP.REQUEST_GAME) return { opcode, playerName: reader.string() };
+  if (opcode === OP.JOIN_LOBBY) return { opcode, playerName: reader.string() };
   if (opcode === OP.SPAWN_POSITION) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32() };
   if (opcode === OP.EXPANSION_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
   if (opcode === OP.CANCEL_EXPANSION) return { opcode, playerId: `player-${reader.u16()}` };
   if (opcode === OP.BOAT_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
+  if (opcode === OP.LEAVE_LOBBY) return { opcode, playerId: `player-${reader.u16()}` };
   throw new Error(`Unknown client opcode: ${opcode}`);
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { OP, REASON, BinaryWriter, BinaryReader, encodeGameAccepted, encodeSpawnPhaseStarted, encodeSpawnConfirmed, encodeRejected, encodeGameStarted, encodeGameUpdate, decodeServerMessage, decodeClientMessage };
+  module.exports = { OP, REASON, BinaryWriter, BinaryReader, encodeGameAccepted, encodeLobbyState, encodeSpawnPhaseStarted, encodeSpawnConfirmed, encodeRejected, encodeGameStarted, encodeGameUpdate, decodeServerMessage, decodeClientMessage };
 }
 
 if (typeof window !== 'undefined') {
-  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u16(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => writer.u16(playerNumber(id))), encodeBoatRequest: (id, position, power) => encodeClientRequest(OP.BOAT_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }) };
+  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestLobby: () => new Uint8Array([OP.REQUEST_LOBBY]), encodeJoinLobby: (name) => encodeClientRequest(OP.JOIN_LOBBY, writer => writer.string(name)), encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u16(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => writer.u16(playerNumber(id))), encodeBoatRequest: (id, position, power) => encodeClientRequest(OP.BOAT_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeLeaveLobby: (id) => encodeClientRequest(OP.LEAVE_LOBBY, writer => writer.u16(playerNumber(id))) };
 }
 
 function encodeClientRequest(opcode, writePayload) {

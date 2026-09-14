@@ -1032,6 +1032,20 @@
       attackRatioPanel.hidden = true;
       leaderboard.hidden = true;
       spawnPhase = data;
+      if (data.players?.length) {
+        gameData.players = data.players;
+        rebuildPlayerMap();
+        for (const player of data.players) {
+          const ownerId = Number(player.playerId.replace('player-', ''));
+          if (player.capitalColor) playerColors.set(ownerId, player.capitalColor);
+        }
+      }
+      if (data.changes?.length) {
+        for (const change of data.changes) gameData.owners[change.position] = change.owner;
+        updateTerritoryLayer(data.changes);
+        territoryVersion += 1;
+        labelsDirty = true;
+      }
       spawnPoints = new Set(data.spawnPoints || []);
       refreshSpawnPoints();
       selectionLocked = false;
@@ -1044,23 +1058,35 @@
       drawDynamic();
     },
     confirmSpawn(data) {
-      spawnMessage.textContent = 'CAPITAL CONFIRMED // GAME STARTING';
-      if (data.color) selectedColor = data.color;
-      const previousCells = [...localCapitalCells];
+      const confirmedPlayerId = data.playerId || localPlayerId;
+      const isLocalPlayer = confirmedPlayerId === localPlayerId;
+      if (isLocalPlayer) {
+        spawnMessage.textContent = 'CAPITAL CONFIRMED // GAME STARTING';
+        if (data.color) selectedColor = data.color;
+      }
+      const previousCells = isLocalPlayer ? [...localCapitalCells] : (data.clearedCells || []);
       previousCells.forEach((cell) => { gameData.owners[cell] = 0; });
-      localCapitalCells = new Set(data.cells || []);
+      const confirmedOwnerId = Number(confirmedPlayerId.replace('player-', ''));
+      const player = playerMap.get(confirmedPlayerId);
+      if (player) {
+        player.spawnPosition = data.position;
+        player.capitalColor = data.color;
+        player.isAlive = true;
+      }
+      if (isLocalPlayer) localCapitalCells = new Set(data.cells || []);
       if (data.cells) {
-        const ownerId = Number(localPlayerId.replace('player-', ''));
-        data.cells.forEach((cell) => { gameData.owners[cell] = ownerId; });
+        data.cells.forEach((cell) => { gameData.owners[cell] = confirmedOwnerId; });
         territoryVersion += 1;
         labelsDirty = true;
         updateTerritoryLayer([
           ...previousCells.map((position) => ({ position, owner: 0 })),
-          ...data.cells.map((position) => ({ position, owner: ownerId }))
+          ...data.cells.map((position) => ({ position, owner: confirmedOwnerId }))
         ]);
       }
-      confirmedPosition = data.position;
-      selectedPosition = data.position;
+      if (isLocalPlayer) {
+        confirmedPosition = data.position;
+        selectedPosition = data.position;
+      }
       invalidateDynamic();
       drawDynamic();
       scheduleLabelDraw();

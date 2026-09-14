@@ -19,7 +19,26 @@ class GameMaster {
     const game = await engine.addPlayer(playerName, playerId);
     this.players.set(game.playerId, { gameId, engine });
     const spawnPhase = engine.startSpawnPhase();
+    this.populateBots(gameId);
     return { game, spawnPhase };
+  }
+
+  async createMatch(lobby) {
+    const gameId = `game-${this.nextGameNumber++}`;
+    const engine = new GameEngine(gameId);
+    this.games.set(gameId, engine);
+    const acceptedPlayers = new Map();
+
+    for (const lobbyPlayer of lobby.players.values()) {
+      const game = await engine.addPlayer(lobbyPlayer.playerName, lobbyPlayer.playerId, false);
+      this.players.set(lobbyPlayer.playerId, { gameId, engine });
+      acceptedPlayers.set(lobbyPlayer.playerId, game);
+      this.nextPlayerNumber = Math.max(this.nextPlayerNumber, Number(lobbyPlayer.playerId.replace('player-', '')) + 1);
+    }
+
+    const spawnPhase = engine.startSpawnPhase();
+    this.populateBots(gameId);
+    return { gameId, engine, spawnPhase, acceptedPlayers };
   }
 
   finalizeGame(gameId) {
@@ -30,8 +49,9 @@ class GameMaster {
 
   addBot(gameId, botName) {
     const engine = this.games.get(gameId);
-    if (!engine || engine.phase !== 'ACTIVE') return null;
-    const playerId = `player-${this.nextPlayerNumber++}`;
+    if (!engine || (engine.phase !== 'SPAWNING' && engine.phase !== 'ACTIVE')) return null;
+    let playerId = `player-${this.nextPlayerNumber++}`;
+    while (engine.players.has(playerId)) playerId = `player-${this.nextPlayerNumber++}`;
     engine.addPlayer(botName, playerId, true);
     this.players.set(playerId, { gameId, engine });
     return playerId;
@@ -39,8 +59,9 @@ class GameMaster {
 
   populateBots(gameId, count = BOT_COUNT) {
     const engine = this.games.get(gameId);
-    if (!engine || engine.phase !== 'ACTIVE') return null;
-    const names = BOT_NAMES.slice(0, count);
+    if (!engine || (engine.phase !== 'SPAWNING' && engine.phase !== 'ACTIVE')) return null;
+    const botsNeeded = Math.max(0, BOT_COUNT - engine.players.size);
+    const names = BOT_NAMES.slice(0, Math.min(count, botsNeeded));
     const candidates = engine.spawnManager.getCandidates();
     for (let index = candidates.length - 1; index > 0; index -= 1) {
       const swapIndex = Math.floor(Math.random() * (index + 1));
@@ -62,7 +83,7 @@ class GameMaster {
       if (position === null) position = engine.spawnManager.randomPosition();
       if (position === null) continue;
       const selected = engine.selectSpawn(playerId, position);
-      if (selected.accepted) engine.players.get(playerId).capitalColor = engine.createPlayerColor(playerId);
+      if (selected.accepted) engine.players.get(playerId).capitalColor = '#8b9298';
     }
     return engine.getState();
   }
