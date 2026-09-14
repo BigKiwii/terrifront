@@ -5,17 +5,26 @@ const {
   BOAT_MAX_SEARCH_CELLS,
   BOAT_MAX_FRONT_TILES
 } = require('../../shared/game-rules');
+const MinHeap = require('./min-heap');
 
 const MAX_POWER = 1000;
+const BOAT_SHORE_BUFFER_TILES = 3;
+const BOAT_SHORE_PENALTY = 12;
 
 // Pathfinding scratch shared by every room. Searches are synchronous and never
 // interleave, and all rooms use the same map size, so one pair of buffers is
-// enough - per-room copies cost 4.6MB each for something only touched while a
-// boat is being launched. The stamp lives here too, so rooms cannot collide.
+// enough - the arrays are several MB each and are only touched while a boat is
+// being launched. The stamp lives here too, so rooms cannot collide.
 let scratch = null;
 function getScratch(cellCount) {
   if (!scratch || scratch.visited.length !== cellCount) {
-    scratch = { visited: new Int32Array(cellCount), parent: new Int32Array(cellCount), stamp: 0 };
+    scratch = {
+      visited: new Int32Array(cellCount),
+      parent: new Int32Array(cellCount),
+      distance: new Float64Array(cellCount),
+      score: new Float64Array(cellCount),
+      stamp: 0
+    };
   }
   return scratch;
 }
@@ -38,6 +47,31 @@ class BoatManager {
 
   isWater(position) {
     return !this.map.isLand(position);
+  }
+
+  waterNeighbors(position) {
+    const width = this.map.width;
+    const height = this.map.height;
+    const x = position % width;
+    const y = Math.floor(position / width);
+    const neighbors = [];
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        if (offsetX === 0 && offsetY === 0) continue;
+        const nextX = x + offsetX;
+        const nextY = y + offsetY;
+        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
+        const nextPosition = nextY * width + nextX;
+        if (!this.isWater(nextPosition)) continue;
+        if (offsetX !== 0 && offsetY !== 0) {
+          const horizontal = y * width + nextX;
+          const vertical = nextY * width + x;
+          if (!this.isWater(horizontal) || !this.isWater(vertical)) continue;
+        }
+        neighbors.push({ position: nextPosition, cost: offsetX === 0 || offsetY === 0 ? 1 : Math.SQRT2 });
+      }
+    }
+    return neighbors;
   }
 
   touchesWater(position) {
@@ -71,44 +105,93 @@ class BoatManager {
   // Shortest water route from any coast this player owns to the landing beach.
   findRoute(ownerId, landing) {
     const goals = new Set();
-    for (const neighbor of this.map.getNeighbors(landing)) {
-      if (this.isWater(neighbor)) goals.add(neighbor);
+    for (const neighbor of this.waterNeighborsAround(landing)) {
+      if (this.isWater(neighbor.position)) goals.add(neighbor.position);
     }
     if (goals.size === 0) return null;
 
-    const { visited, parent } = this.scratch;
+    const { visited, parent, distance, score } = this.scratch;
     const stamp = ++this.scratch.stamp;
-    const queue = [];
+    const queue = new MinHeap();
     for (const border of this.territory.getBorderSet(ownerId)) {
       if (this.map.owners[border] !== ownerId) continue;
-      for (const neighbor of this.map.getNeighbors(border)) {
-        if (!this.isWater(neighbor) || visited[neighbor] === stamp) continue;
+      for (const { position: neighbor } of this.waterNeighborsAround(border)) {
+        if (visited[neighbor] === stamp) continue;
         visited[neighbor] = stamp;
         parent[neighbor] = -1;
-        queue.push(neighbor);
+        distance[neighbor] = 0;
+        score[neighbor] = 0;
+        queue.push({ position: neighbor, priority: 0 });
       }
     }
-    if (queue.length === 0) return null;
+    if (queue.size === 0) return null;
 
-    let head = 0;
     let explored = 0;
-    while (head < queue.length && explored < BOAT_MAX_SEARCH_CELLS) {
-      const position = queue[head++];
+    while (queue.size > 0 && explored < BOAT_MAX_SEARCH_CELLS) {
+      const current = queue.pop();
+      const position = current.position;
+      if (current.priority !== score[position]) continue;
       explored += 1;
       if (goals.has(position)) {
         const route = [];
         for (let step = position; step !== -1; step = parent[step]) route.push(step);
         route.reverse();
-        return route;
+        return { route, distance: distance[position] };
       }
-      for (const neighbor of this.map.getNeighbors(position)) {
-        if (visited[neighbor] === stamp || !this.isWater(neighbor)) continue;
+      for (const { position: neighbor, cost } of this.waterNeighbors(position)) {
+        const nextDistance = distance[position] + cost;
+        const nextScore = score[position] + cost + this.shorePenalty(neighbor, landing, goals);
+        if (visited[neighbor] === stamp && nextScore >= score[neighbor]) continue;
         visited[neighbor] = stamp;
+        distance[neighbor] = nextDistance;
+        score[neighbor] = nextScore;
         parent[neighbor] = position;
-        queue.push(neighbor);
+        queue.push({ position: neighbor, priority: nextScore });
       }
     }
     return null;
+  }
+
+  waterNeighborsAround(position) {
+    const width = this.map.width;
+    const height = this.map.height;
+    const x = position % width;
+    const y = Math.floor(position / width);
+    const neighbors = [];
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        if (offsetX === 0 && offsetY === 0) continue;
+        const nextX = x + offsetX;
+        const nextY = y + offsetY;
+        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
+        const nextPosition = nextY * width + nextX;
+        if (this.isWater(nextPosition)) neighbors.push({ position: nextPosition, cost: offsetX === 0 || offsetY === 0 ? 1 : Math.SQRT2 });
+      }
+    }
+    return neighbors;
+  }
+
+  shorePenalty(position, landing, goals) {
+    if (goals.has(position)) return 0;
+    const width = this.map.width;
+    const height = this.map.height;
+    const x = position % width;
+    const y = Math.floor(position / width);
+    let nearestLand = BOAT_SHORE_BUFFER_TILES + 1;
+    for (let offsetY = -BOAT_SHORE_BUFFER_TILES; offsetY <= BOAT_SHORE_BUFFER_TILES; offsetY += 1) {
+      for (let offsetX = -BOAT_SHORE_BUFFER_TILES; offsetX <= BOAT_SHORE_BUFFER_TILES; offsetX += 1) {
+        if (offsetX === 0 && offsetY === 0) continue;
+        const nextX = x + offsetX;
+        const nextY = y + offsetY;
+        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
+        const neighbor = nextY * width + nextX;
+        if (neighbor === landing || !this.map.isLand(neighbor)) continue;
+        nearestLand = Math.min(nearestLand, Math.max(Math.abs(offsetX), Math.abs(offsetY)));
+      }
+    }
+    return nearestLand > BOAT_SHORE_BUFFER_TILES
+      ? 0
+      : (BOAT_SHORE_BUFFER_TILES + 1 - nearestLand) ** 2 * BOAT_SHORE_PENALTY;
   }
 
   // The owned tiles a landing party can attack from: the connected pocket of our
@@ -146,8 +229,9 @@ class BoatManager {
     if (landing === null || this.map.owners[landing] === ownerId) {
       return { accepted: false, reason: 'NO_WATER_ROUTE' };
     }
-    const route = this.findRoute(ownerId, landing);
-    if (!route || route.length === 0) return { accepted: false, reason: 'NO_WATER_ROUTE' };
+    const routeResult = this.findRoute(ownerId, landing);
+    if (!routeResult || routeResult.route.length === 0) return { accepted: false, reason: 'NO_WATER_ROUTE' };
+    const { route, distance } = routeResult;
 
     const normalizedPower = Math.max(0, Math.min(MAX_POWER, Number(power) || 0));
     const troops = Math.min(player.troops, Math.floor(player.troops * normalizedPower / MAX_POWER));
@@ -164,7 +248,7 @@ class BoatManager {
       landing
     };
     this.boats.set(boat.id, boat);
-    return { accepted: true, playerId, troops, power: normalizedPower, boat: true, distance: route.length };
+    return { accepted: true, playerId, troops, power: normalizedPower, boat: true, distance };
   }
 
   tick() {
@@ -283,7 +367,7 @@ class BoatManager {
     for (const boat of this.boats.values()) {
       list.push({
         ownerId: boat.ownerId,
-        position: boat.route[Math.min(boat.index, boat.route.length - 1)],
+        position: boat.route[Math.min(Math.floor(boat.index), boat.route.length - 1)],
         troops: Math.floor(boat.troops)
       });
     }
