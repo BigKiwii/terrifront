@@ -73,15 +73,13 @@ builder/       Bundles the browser client into dist/
 scripts/       Map baking utilities
 map/           Baked map data and manifests
 Assets/        Game artwork and interface assets
-warfront-reference/
-               Reference implementations used while studying related systems
 ```
 
 The server is authoritative: gameplay state is mutated on the backend, serialized through the shared binary protocol, and merged into the client-side view. Updates are sent as deltas where possible so quiet ticks do not retransmit unchanged player state.
 
 ## Acknowledgment
 
-TerriFront was heavily informed by studying **WarFront**. The `warfront-reference/` directory contains reference code and naming patterns that helped shape parts of the territory, rendering, player, bot, and attack systems. This project is an independent implementation and is not affiliated with or endorsed by WarFront.
+TerriFront was heavily informed by studying **WarFront** and related territory, rendering, player, bot, and attack systems. This project is an independent implementation and is not affiliated with or endorsed by WarFront.
 
 ## Status
 
@@ -89,4 +87,4 @@ TerriFront is an active experimental project. The core multiplayer loop, map ren
 
 ## License
 
-No license has been declared yet. Treat the repository as source-available for now and check with the project owner before redistributing it.
+TerriFront is licensed under the **GNU General Public License v3.0-only**. See [LICENSE](LICENSE) for the project license notice and the official GNU terms.
