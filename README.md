@@ -63,6 +63,42 @@ $env:PORT = 8081; npm start
 4. Choose an expansion or boat action, then set the troop ratio.
 5. Grow your territory, protect your borders, and outlast the other players.
 
+## Multiplayer
+
+TerriFront now includes an early true-multiplayer flow built around a rolling lobby:
+
+```text
+Open lobby (30 seconds)
+  |
+  +-- nobody joins --> discard lobby --> create the next lobby
+  |
+  +-- players join --> start one shared match --> create the next lobby
+```
+
+Players who press **Play** first see the current map-backed lobby. The player list, countdown, and lobby capacity update live over WebSockets. When the timer ends, every player in that lobby enters the same server-authoritative match and receives shared spawn, territory, boat, and player updates. A new lobby is opened immediately for the next group of players.
+
+The multiplayer implementation is split into focused areas:
+
+- `backend/multiplayer/` manages lobby state and the rolling lobby timer.
+- `backend/game-master-main/` creates shared match engines and fills remaining slots with bots.
+- `backend/websocket.js` manages lobby observers, match socket groups, broadcasts, and action ownership checks.
+- `shared/binary-protocol.js` carries lobby, spawn, and game messages as compact binary packets.
+- `frontend/index.js` and `frontend/index.html` provide the lobby experience before handing control to the game UI.
+
+### Early-stage limitations
+
+This is the first multiplayer implementation and is not production infrastructure yet:
+
+- Lobby and match state live in server memory and disappear when the Node.js process stops.
+- It is designed for one server process; there is no database, shared session store, or multi-server scaling layer.
+- There is one rolling public lobby rather than private rooms, matchmaking filters, or invites.
+- The lobby timer is fixed at 30 seconds and matches target 250 total players, using bots to fill open slots.
+- Reconnection, persistent accounts, moderation, rate limiting, and durable match history are not implemented yet.
+- A disconnected player is not yet guaranteed a full session-resume flow.
+- Multiplayer load testing beyond local two-client verification is still pending.
+
+The current priority is correctness and a clear shared-match lifecycle. Persistence, reconnection, stronger session management, and horizontal scaling should be added before treating the system as production-ready.
+
 ## Project Shape
 
 ```text
