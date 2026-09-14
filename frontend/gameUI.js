@@ -294,7 +294,7 @@
     TerriPlayerLabelRenderer.invalidateLayout();
     const width = gameData?.map.width || 876;
     const height = gameData?.map.height || 694;
-    mapScale = renderScale * Math.min(window.devicePixelRatio || 1, 2);
+    mapScale = renderScale * Math.max(1, Math.floor(window.devicePixelRatio || 1));
     canvas.style.width = `${mapFrame.clientWidth}px`;
     canvas.style.height = `${mapFrame.clientHeight}px`;
     dynamicCanvas.style.width = `${canvas.offsetWidth}px`;
