@@ -53,6 +53,7 @@
   let mapScale = 1;
   let hoverPosition = null;
   let playerColors = new Map();
+  let playerColorCache = new Map();
   let localCapitalCells = new Set();
   let confirmedPosition = null;
   let currentPower = 500;
@@ -79,6 +80,9 @@
   let dynamicLayerDirty = true;
   let labelsDirty = true;
   let boats = [];
+  let territoryImageData = null;
+  let localWaterBorderVersion = -1;
+  let localPlayerHasWaterBorder = false;
   let labelsCameraDirty = true;
   let lastLabelDrawAt = 0;
   let labelDrawFrame = null;
@@ -319,23 +323,6 @@
     });
   }
 
-  function mapMetrics() {
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    const imageWidth = width;
-    const imageHeight = height;
-    return {
-      width,
-      height,
-      imageWidth,
-      imageHeight,
-      offsetX: (width - imageWidth) / 2,
-      offsetY: (height - imageHeight) / 2,
-      cellWidth: imageWidth / gameData.map.width,
-      cellHeight: imageHeight / gameData.map.height
-    };
-  }
-
   function drawCapital(position, color) {
     if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return;
     const centerX = position % gameData.map.width;
@@ -356,13 +343,7 @@
     dynamicContext.restore();
   }
 
-  function decodeTerrain(encodedTerrain) {
-    const binary = atob(encodedTerrain);
-    terrain = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) terrain[index] = binary.charCodeAt(index);
-  }
-
-  function decodeEmbeddedBytes(encoded) {
+  function decodeBytes(encoded) {
     const binary = atob(encoded);
     const bytes = new Uint8Array(binary.length);
     for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
@@ -371,10 +352,11 @@
 
   async function loadTerrain(mapData, sessionId) {
     if (window.TerriEmbeddedTerrain) {
-      const decodedTerrain = decodeEmbeddedBytes(window.TerriEmbeddedTerrain);
+      const decodedTerrain = decodeBytes(window.TerriEmbeddedTerrain);
       if (sessionId !== gameSessionId) return;
       terrain = decodedTerrain;
       buildTerrainLayer();
+      refreshSpawnPoints();
       draw();
       return;
     }
@@ -387,13 +369,20 @@
     if (sessionId !== gameSessionId) return;
     terrain = loadedTerrain;
     buildTerrainLayer();
+    refreshSpawnPoints();
     draw();
+  }
+
+  function refreshSpawnPoints() {
+    if (!spawnPhase || !terrain) return;
+    spawnPoints = new Set([...spawnPoints].filter((position) => isValidCapital(position)));
+    invalidateDynamic();
   }
 
   async function loadExpansionTimes(mapData, sessionId) {
     if (!mapData.expansionTimesUrl) return;
     if (window.TerriEmbeddedExpansionTimes) {
-      const decodedExpansionTimes = decodeEmbeddedBytes(window.TerriEmbeddedExpansionTimes);
+      const decodedExpansionTimes = decodeBytes(window.TerriEmbeddedExpansionTimes);
       if (sessionId !== gameSessionId) return;
       expansionTimes = decodedExpansionTimes;
       return;
@@ -477,6 +466,21 @@
     };
   }
 
+  function colorsForOwner(ownerId) {
+    const color = playerColors.get(ownerId) || selectedColor;
+    const cached = playerColorCache.get(ownerId);
+    if (cached?.source === color) return cached;
+    const colors = warFrontPlayerColors(color);
+    const parse = (value) => {
+      const match = value.match(/^rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)$/);
+      if (!match) return null;
+      return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] === undefined ? 255 : Math.round(Number(match[4]) * 255)];
+    };
+    const cachedColors = { source: color, colors, territoryPixel: parse(colors.territory), borderPixel: parse(colors.border) };
+    playerColorCache.set(ownerId, cachedColors);
+    return cachedColors;
+  }
+
   function isBorderCell(position, owner) {
     const width = gameData.map.width;
     const height = gameData.map.height;
@@ -491,27 +495,31 @@
     if (position < 0 || position >= gameData.owners.length) return;
     const width = gameData.map.width;
     const owner = gameData.owners[position];
-    const x = position % width;
-    const y = Math.floor(position / width);
-    territoryContext.clearRect(x, y, 1, 1);
+    if (!territoryImageData) return;
+    const pixel = position * 4;
+    territoryImageData.data[pixel] = 0;
+    territoryImageData.data[pixel + 1] = 0;
+    territoryImageData.data[pixel + 2] = 0;
+    territoryImageData.data[pixel + 3] = 0;
     if (!owner) return;
-    const colors = warFrontPlayerColors(playerColors.get(owner) || selectedColor);
-    territoryContext.fillStyle = colors.territory;
-    territoryContext.fillRect(x, y, 1, 1);
-    if (isBorderCell(position, owner)) {
-      territoryContext.fillStyle = colors.border;
-      territoryContext.fillRect(x, y, 1, 1);
-    }
+    const colors = colorsForOwner(owner);
+    const color = isBorderCell(position, owner) ? colors.borderPixel : colors.territoryPixel;
+    if (!color) return;
+    territoryImageData.data[pixel] = color[0];
+    territoryImageData.data[pixel + 1] = color[1];
+    territoryImageData.data[pixel + 2] = color[2];
+    territoryImageData.data[pixel + 3] = color[3];
   }
 
   function rebuildTerritoryLayer() {
     if (!gameData?.owners) return;
     territoryCanvas.width = gameData.map.width;
     territoryCanvas.height = gameData.map.height;
-    territoryContext.clearRect(0, 0, gameData.map.width, gameData.map.height);
+    territoryImageData = territoryContext.createImageData(gameData.map.width, gameData.map.height);
     for (let position = 0; position < gameData.owners.length; position += 1) {
       paintTerritoryTile(position);
     }
+    territoryContext.putImageData(territoryImageData, 0, 0);
     composeSceneLayer();
   }
 
@@ -522,6 +530,7 @@
       for (const neighbor of mapNeighbors(change.position)) affected.add(neighbor);
     }
     for (const position of affected) paintTerritoryTile(position);
+    if (territoryImageData) territoryContext.putImageData(territoryImageData, 0, 0);
     composeSceneLayer();
   }
 
@@ -571,7 +580,6 @@
     dynamicContext.fillStyle = 'rgba(154, 162, 166, 0.9)';
     dynamicContext.globalAlpha = 0.9;
     for (const position of spawnPoints) {
-      if (!isValidCapital(position)) continue;
       const centerX = position % gameData.map.width;
       const centerY = Math.floor(position / gameData.map.width);
       for (let y = -2; y <= 2; y += 1) {
@@ -727,9 +735,8 @@
     const rectangle = canvas.getBoundingClientRect();
     const localX = (event.clientX - rectangle.left) * (gameData.map.width / rectangle.width);
     const localY = (event.clientY - rectangle.top) * (gameData.map.height / rectangle.height);
-    const metrics = mapMetrics();
-    const mapX = Math.floor((localX - metrics.offsetX) / metrics.cellWidth);
-    const mapY = Math.floor((localY - metrics.offsetY) / metrics.cellHeight);
+    const mapX = Math.floor(localX);
+    const mapY = Math.floor(localY);
     if (mapX < 0 || mapX >= gameData.map.width || mapY < 0 || mapY >= gameData.map.height) return null;
     return mapY * gameData.map.width + mapX;
   }
@@ -835,11 +842,17 @@
   }
 
   function playerHasWaterBorder(ownerId) {
+    if (localWaterBorderVersion === territoryVersion) return localPlayerHasWaterBorder;
+    localPlayerHasWaterBorder = false;
     for (let position = 0; position < gameData.owners.length; position += 1) {
       if (gameData.owners[position] !== ownerId) continue;
-      if (mapNeighbors(position).some((neighbor) => (terrain[neighbor] & 0x80) === 0)) return true;
+      if (mapNeighbors(position).some((neighbor) => (terrain[neighbor] & 0x80) === 0)) {
+        localPlayerHasWaterBorder = true;
+        break;
+      }
     }
-    return false;
+    localWaterBorderVersion = territoryVersion;
+    return localPlayerHasWaterBorder;
   }
 
   function targetNearWater(position, maxDistance = 10) {
@@ -966,7 +979,8 @@
       gameData.owners = new Int32Array(data.map.width * data.map.height);
       territoryCanvas.width = data.map.width;
       territoryCanvas.height = data.map.height;
-      territoryContext.clearRect(0, 0, data.map.width, data.map.height);
+      territoryImageData = territoryContext.createImageData(data.map.width, data.map.height);
+      territoryContext.putImageData(territoryImageData, 0, 0);
       terrain = null;
       expansionTimes = null;
       context.clearRect(0, 0, data.map.width, data.map.height);
@@ -977,6 +991,8 @@
       labelsDirty = true;
       labelsCameraDirty = true;
       boats = [];
+      playerColorCache = new Map();
+      localWaterBorderVersion = -1;
       lastLabelDrawAt = 0;
       loadTerrain(data.map, sessionId).catch((error) => {
         if (sessionId !== gameSessionId) return;
@@ -1011,6 +1027,7 @@
       leaderboard.hidden = true;
       spawnPhase = data;
       spawnPoints = new Set(data.spawnPoints || []);
+      refreshSpawnPoints();
       selectionLocked = false;
       spawnHud.hidden = false;
       spawnMessage.textContent = 'CHOOSE A LAND POSITION FOR YOUR CAPITAL';

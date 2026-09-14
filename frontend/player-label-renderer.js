@@ -3,14 +3,12 @@
 
   let cachedGameData = null;
   let cachedTerritoryVersion = -1;
-  let cachedAt = 0;
   let cachedSquares = new Map();
   let labelCanvas = null;
   let labelContext = null;
   let mapCanvas = null;
   let mapBounds = null;
   const MIN_LABEL_PIXELS = 7;
-  const LABEL_CACHE_INTERVAL_MS = 250;
 
   function formatTroops(value) {
     return Math.round(Number(value) || 0).toLocaleString('en-US').replace(/,/g, ' ');
@@ -110,13 +108,10 @@
     if (!labelContext || !mapCanvas || !gameData?.owners || !gameData.players) return;
     const width = gameData.map.width;
     const height = gameData.map.height;
-    const now = performance.now();
-    const cacheExpired = now - cachedAt >= LABEL_CACHE_INTERVAL_MS;
-    if (gameData !== cachedGameData || (territoryVersion !== cachedTerritoryVersion && cacheExpired)) {
+    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion) {
       cachedSquares = largestOwnedSquares(gameData.owners, width, height);
       cachedGameData = gameData;
       cachedTerritoryVersion = territoryVersion;
-      cachedAt = now;
     }
     if (!mapBounds) mapBounds = mapCanvas.getBoundingClientRect();
     const scaleX = mapBounds.width / width;
@@ -148,12 +143,10 @@
     if (!gameData?.owners || !gameData.players) return null;
     const width = gameData.map.width;
     const height = gameData.map.height;
-    const now = performance.now();
-    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion || now - cachedAt >= LABEL_CACHE_INTERVAL_MS) {
+    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion) {
       cachedSquares = largestOwnedSquares(gameData.owners, width, height);
       cachedGameData = gameData;
       cachedTerritoryVersion = territoryVersion;
-      cachedAt = now;
     }
     const square = cachedSquares.get(Number(String(playerId).replace('player-', '')));
     if (!square) {

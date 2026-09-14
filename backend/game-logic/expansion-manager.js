@@ -28,7 +28,7 @@ class ExpansionManager {
       ownerId,
       targetOwnerId,
       troops,
-      tileQueue: Array.from({ length: MAX_SCHEDULE_TICKS }, () => []),
+      tileQueue: new Map(),
       queueSlot: 0,
       scheduledTiles: 0,
       queued: new Set(),
@@ -48,9 +48,9 @@ class ExpansionManager {
   tick() {
     const changes = [];
     for (const attack of this.attacks.values()) {
-      const currentSlot = attack.tileQueue[attack.queueSlot];
-      const toProcess = currentSlot.splice(0, currentSlot.length);
-      for (const position of toProcess) {
+      const currentSlot = attack.tileQueue.get(attack.queueSlot);
+      if (currentSlot) attack.tileQueue.delete(attack.queueSlot);
+      for (const position of currentSlot || []) {
         attack.scheduledTiles -= 1;
         attack.queued.delete(position);
         if (attack.troops <= 0) break;
@@ -72,8 +72,10 @@ class ExpansionManager {
           this.requeueNeutralFrontier(attack, result.releasedPositions || []);
           this.cancelEliminatedPlayer(result.eliminatedOwnerId);
         }
-        const frontier = this.map.getNeighbors(position)
-          .filter((neighbor) => this.isTargetTile(neighbor, attack) && !attack.queued.has(neighbor));
+        const frontier = [];
+        for (const neighbor of this.map.getNeighbors(position)) {
+          if (this.isTargetTile(neighbor, attack) && !attack.queued.has(neighbor)) frontier.push(neighbor);
+        }
         this.scheduleCandidates(attack, frontier);
       }
 
@@ -102,12 +104,16 @@ class ExpansionManager {
 
   requeueNeutralFrontier(attack, releasedPositions) {
     const released = new Set(releasedPositions);
-    for (const queue of attack.tileQueue) {
-      for (let index = queue.length - 1; index >= 0; index -= 1) {
-        if (!released.has(queue[index])) continue;
-        queue.splice(index, 1);
-        attack.scheduledTiles -= 1;
+    for (const queue of attack.tileQueue.values()) {
+      let write = 0;
+      for (let index = 0; index < queue.length; index += 1) {
+        if (released.has(queue[index])) {
+          attack.scheduledTiles -= 1;
+          continue;
+        }
+        queue[write++] = queue[index];
       }
+      queue.length = write;
     }
     for (const position of released) attack.queued.delete(position);
     this.scheduleCandidates(attack, this.getAttackCandidates(attack));
@@ -133,14 +139,21 @@ class ExpansionManager {
     for (const position of candidates) {
       if (attack.queued.has(position)) continue;
       attack.queued.add(position);
-      const contacts = this.map.getNeighbors(position)
-        .filter((neighbor) => this.map.owners[neighbor] === attack.ownerId).length;
+      let contacts = 0;
+      for (const neighbor of this.map.getNeighbors(position)) {
+        if (this.map.owners[neighbor] === attack.ownerId) contacts += 1;
+      }
       const expansionTime = this.map.expansionTimes?.[position] || 50;
       const jitter = Math.random() * 0.06;
       const momentum = attack.neutralMomentum ? 0.6 : 1;
       const delayTicks = Math.max(1, Math.floor(expansionTime * (0.08 - 0.02 * Math.min(3, contacts) + jitter) * speedFactor * momentum));
       const slot = (attack.queueSlot + delayTicks) % MAX_SCHEDULE_TICKS;
-      attack.tileQueue[slot].push(position);
+      let slotQueue = attack.tileQueue.get(slot);
+      if (!slotQueue) {
+        slotQueue = [];
+        attack.tileQueue.set(slot, slotQueue);
+      }
+      slotQueue.push(position);
       attack.scheduledTiles += 1;
     }
   }
@@ -156,15 +169,17 @@ class ExpansionManager {
         if (this.isTargetTile(neighbor, attack)) candidates.add(neighbor);
       }
     }
-    return [...candidates];
+    return candidates;
   }
 
   refreshAttackBorder(attack, position) {
-    for (const candidate of [position, ...this.map.getNeighbors(position)]) {
-      if (!this.territory.isOwnedBy(candidate, attack.ownerId)) continue;
+    const refresh = (candidate) => {
+      if (!this.territory.isOwnedBy(candidate, attack.ownerId)) return;
       if (this.territory.isBorderTile(candidate, attack.ownerId)) attack.borderTiles.add(candidate);
       else attack.borderTiles.delete(candidate);
-    }
+    };
+    refresh(position);
+    for (const neighbor of this.map.getNeighbors(position)) refresh(neighbor);
   }
 
   finishAttack(attack) {
@@ -174,13 +189,16 @@ class ExpansionManager {
   }
 
   cancel(playerId) {
-    for (const attack of [...this.attacks.values()]) {
+    for (const attack of this.attacks.values()) {
       if (attack.playerId === playerId) this.finishAttack(attack);
     }
   }
 
   isActive(playerId) {
-    return this.getActiveCount(playerId) > 0;
+    for (const attack of this.attacks.values()) {
+      if (attack.playerId === playerId) return true;
+    }
+    return false;
   }
 
   getActiveCount(playerId) {

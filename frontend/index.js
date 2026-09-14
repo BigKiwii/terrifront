@@ -53,6 +53,10 @@
     TerriGameUI.rejectExpansion(message.payload);
   });
 
+  TerriCommunicator.on(OP.BOAT_REJECTED, function (message) {
+    TerriGameUI.rejectExpansion(message.payload);
+  });
+
   TerriGameUI.onSpawnSubmit(function (payload) {
     TerriCommunicator.send(PROTOCOL.encodeSpawnPosition(payload.playerId, payload.position));
   });
@@ -68,7 +72,7 @@
   });
 
   quitButton.addEventListener('click', function () {
-    TerriCommunicator.socket?.close();
+    TerriCommunicator.disconnect();
     TerriGameUI.stop();
     gameScreen.hidden = true;
     homeScreen.hidden = false;

@@ -28,16 +28,16 @@ class GameMaster {
     return game.finalizeSpawnPhase();
   }
 
-  async addBot(gameId, botName) {
+  addBot(gameId, botName) {
     const engine = this.games.get(gameId);
     if (!engine || engine.phase !== 'ACTIVE') return null;
     const playerId = `player-${this.nextPlayerNumber++}`;
-    await engine.addPlayer(botName, playerId, true);
+    engine.addPlayer(botName, playerId, true);
     this.players.set(playerId, { gameId, engine });
     return playerId;
   }
 
-  async populateBots(gameId, count = BOT_COUNT) {
+  populateBots(gameId, count = BOT_COUNT) {
     const engine = this.games.get(gameId);
     if (!engine || engine.phase !== 'ACTIVE') return null;
     const names = BOT_NAMES.slice(0, count);
@@ -48,7 +48,7 @@ class GameMaster {
     }
     let candidateIndex = 0;
     for (const name of names) {
-      const playerId = await this.addBot(gameId, name);
+      const playerId = this.addBot(gameId, name);
       if (!playerId) continue;
       let position = null;
       while (candidateIndex < candidates.length) {
@@ -71,11 +71,9 @@ class GameMaster {
     const game = this.games.get(gameId);
     if (!game) return false;
     this.games.delete(gameId);
-    for (const [playerId, player] of this.players) {
-      if (player.gameId === gameId) {
-        if (game.phase === 'SPAWNING') player.engine.releasePlayer(playerId);
-        this.players.delete(playerId);
-      }
+    for (const playerId of game.players.keys()) {
+      if (game.phase === 'SPAWNING') game.releasePlayer(playerId);
+      this.players.delete(playerId);
     }
     return true;
   }

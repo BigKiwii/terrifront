@@ -7,6 +7,7 @@ const OP = Object.freeze({
   GAME_STARTED: 0x06,
   GAME_UPDATE: 0x07,
   EXPANSION_REJECTED: 0x08,
+  BOAT_REJECTED: 0x09,
   REQUEST_GAME: 0x10,
   SPAWN_POSITION: 0x11,
   EXPANSION_REQUEST: 0x12,
@@ -62,6 +63,14 @@ class BinaryWriter {
     this.view.setUint16(this.position, value, false);
     this.position += 2;
   }
+  u24(value) {
+    if (value < 0 || value > 0xffffff) throw new Error(`Value ${value} exceeds binary u24 range`);
+    this.grow(3);
+    this.view.setUint8(this.position, (value >>> 16) & 0xff);
+    this.view.setUint8(this.position + 1, (value >>> 8) & 0xff);
+    this.view.setUint8(this.position + 2, value & 0xff);
+    this.position += 3;
+  }
   u32(value) { this.grow(4); this.view.setUint32(this.position, value >>> 0, false); this.position += 4; }
 
   string(value) {
@@ -102,6 +111,7 @@ class BinaryReader {
 
   u8() { this.ensure(1); const value = this.view.getUint8(this.position); this.position += 1; return value; }
   u16() { this.ensure(2); const value = this.view.getUint16(this.position, false); this.position += 2; return value; }
+  u24() { this.ensure(3); const value = (this.view.getUint8(this.position) << 16) | (this.view.getUint8(this.position + 1) << 8) | this.view.getUint8(this.position + 2); this.position += 3; return value; }
   u32() { this.ensure(4); const value = this.view.getUint32(this.position, false); this.position += 4; return value; }
 
   string() {
@@ -131,8 +141,8 @@ function playerFlags(player) {
 function writePlayer(writer, player, includeDetails) {
   writer.u16(playerNumber(player.playerId));
   if (includeDetails) writer.string(player.playerName || '');
-  writer.u32(player.troops || 0);
-  writer.u32(player.territorySize || 0);
+  writer.u24(player.troops || 0);
+  writer.u24(player.territorySize || 0);
   if (includeDetails) {
     writer.color(player.capitalColor);
     writer.u32(player.spawnPosition == null ? 0xffffffff : player.spawnPosition);
@@ -144,8 +154,8 @@ function readPlayer(reader, includeDetails) {
   const playerId = `player-${reader.u16()}`;
   const player = { playerId };
   if (includeDetails) player.playerName = reader.string();
-  player.troops = reader.u32();
-  player.territorySize = reader.u32();
+  player.troops = reader.u24();
+  player.territorySize = reader.u24();
   if (includeDetails) {
     player.capitalColor = reader.color();
     const spawnPosition = reader.u32();
@@ -251,7 +261,7 @@ function encodeGameUpdate(state) {
     for (const boat of boats) {
       writer.u16(boat.ownerId);
       writer.u32(boat.position);
-      writer.u32(boat.troops);
+      writer.u16(boat.troops || 0);
     }
   }
   return writer.finish();
@@ -284,7 +294,7 @@ function decodeServerMessage(value) {
     for (let index = 0, count = reader.u32(); index < count; index += 1) cells.push(reader.u32());
     return { opcode, payload: { accepted: true, position, color, cells } };
   }
-  if (opcode === OP.GAME_REJECTED || opcode === OP.SPAWN_REJECTED || opcode === OP.EXPANSION_REJECTED) {
+  if (opcode === OP.GAME_REJECTED || opcode === OP.SPAWN_REJECTED || opcode === OP.EXPANSION_REJECTED || opcode === OP.BOAT_REJECTED) {
     const reason = REASON_NAMES[reader.u8()] || 'INVALID_GAME_REQUEST';
     return { opcode, payload: { reason } };
   }
@@ -306,7 +316,7 @@ function decodeServerMessage(value) {
     const boats = [];
     if (flags & 8) {
       for (let index = 0, count = reader.u16(); index < count; index += 1) {
-        boats.push({ ownerId: reader.u16(), position: reader.u32(), troops: reader.u32() });
+        boats.push({ ownerId: reader.u16(), position: reader.u32(), troops: reader.u16() });
       }
     }
     return { opcode, payload: { tickCount, changes, players, winnerId, boats } };

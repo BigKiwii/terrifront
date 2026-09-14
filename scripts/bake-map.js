@@ -9,6 +9,12 @@ const outputPath = path.join(outputDir, 'map.bin');
 const expansionTimesPath = path.join(outputDir, 'expansion-times.bin');
 const manifestPath = path.join(outputDir, 'manifest.json');
 
+function terrainMagnitude(blue) {
+  if (blue < 159) return 0;
+  if (blue < 179) return 10;
+  return Math.min(30, 20 + Math.floor((blue - 179) / 2));
+}
+
 async function bake() {
   const { data, info } = await sharp(sourcePath).raw().toBuffer({ resolveWithObject: true });
   const terrain = Buffer.alloc(info.width * info.height);
@@ -19,9 +25,7 @@ async function bake() {
     const green = data[pixel + 1];
     const blue = data[pixel + 2];
     const land = !(blue > red + 15 && blue > green + 10);
-    const magnitude = !land ? 0 : blue < 159 ? 0 : blue < 179 ? 10 : Math.min(30, 20 + Math.floor((blue - 179) / 2));
-    const shoreline = land && blue >= 195;
-    terrain[position] = (land ? 0x80 : 0) | (shoreline ? 0x40 : 0) | magnitude;
+    terrain[position] = land ? 0x80 | terrainMagnitude(blue) : 0;
     const brightness = Math.floor((red + green + blue) / 3);
     expansionTimes[position] = land ? Math.max(10, Math.min(200, 220 - brightness)) : 0;
   }
