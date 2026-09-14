@@ -345,26 +345,26 @@
     return cells;
   }
 
-  function drawCapital(position, color, cells = null) {
+  function drawCapital(position, color) {
     if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return;
-    const width = gameData.map.width;
-    const shape = Array.isArray(cells) && cells.length ? cells : getCapitalCells(position);
-    if (!shape.length) return;
+    const centerX = position % gameData.map.width;
+    const centerY = Math.floor(position / gameData.map.width);
     const colors = warFrontPlayerColors(color || '#69c878');
-    const cellSet = new Set(shape);
-    dynamicContext.save();
-    for (const cell of shape) {
-      const x = cell % width;
-      const y = Math.floor(cell / width);
-      const hasEast = cellSet.has(x + 1 < width ? cell + 1 : -1);
-      const hasWest = cellSet.has(x - 1 >= 0 ? cell - 1 : -1);
-      const hasNorth = cellSet.has(y - 1 >= 0 ? cell - width : -1);
-      const hasSouth = cellSet.has(y + 1 < gameData.map.height ? cell + width : -1);
-      const isBorderTile = !hasEast || !hasWest || !hasNorth || !hasSouth;
-      dynamicContext.fillStyle = isBorderTile ? colors.border : colors.territory;
-      dynamicContext.fillRect(x, y, 1, 1);
+
+    dynamicContext.fillStyle = colors.border;
+    for (let offsetY = -2; offsetY <= 2; offsetY += 1) {
+      for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
+        if (Math.abs(offsetX) === 2 && Math.abs(offsetY) === 2) continue;
+        dynamicContext.fillRect(centerX + offsetX, centerY + offsetY, 1, 1);
+      }
     }
-    dynamicContext.restore();
+
+    dynamicContext.fillStyle = colors.territory;
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        dynamicContext.fillRect(centerX + offsetX, centerY + offsetY, 1, 1);
+      }
+    }
   }
 
   function decodeBytes(encoded) {
@@ -469,7 +469,7 @@
       const blue = parseInt(hexMatch[1].slice(4, 6), 16);
       return {
         territory: `rgb(${red},${green},${blue})`,
-        border: `rgba(${Math.floor(red * 0.6)},${Math.floor(green * 0.6)},${Math.floor(blue * 0.6)},1)`
+        border: `rgb(${Math.floor(red * 0.7)},${Math.floor(green * 0.7)},${Math.floor(blue * 0.7)})`
       };
     }
 
