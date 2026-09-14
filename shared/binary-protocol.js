@@ -145,11 +145,15 @@ function playerFlags(player) {
     (player.expansionActive ? 8 : 0);
 }
 
+function boundedU24(value) {
+  return Math.min(0xffffff, Math.max(0, Math.floor(Number(value) || 0)));
+}
+
 function writePlayer(writer, player, includeDetails) {
   writer.u16(playerNumber(player.playerId));
   if (includeDetails) writer.string(player.playerName || '');
-  writer.u24(player.troops || 0);
-  writer.u24(player.territorySize || 0);
+  writer.u24(boundedU24(player.troops));
+  writer.u24(boundedU24(player.territorySize));
   if (includeDetails) {
     writer.color(player.capitalColor);
     writer.u32(player.spawnPosition == null ? 0xffffffff : player.spawnPosition);
