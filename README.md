@@ -88,3 +88,7 @@ TerriFront is an active experimental project. The core multiplayer loop, map ren
 ## License
 
 TerriFront is licensed under the **GNU General Public License v3.0-only**. See [LICENSE](LICENSE) for the project license notice and the official GNU terms.
+
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [CLA.md](CLA.md) before submitting code, artwork, map data, or documentation.
