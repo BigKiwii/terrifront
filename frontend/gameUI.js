@@ -834,17 +834,52 @@
     menuPosition = null;
   }
 
+  function playerHasWaterBorder(ownerId) {
+    for (let position = 0; position < gameData.owners.length; position += 1) {
+      if (gameData.owners[position] !== ownerId) continue;
+      if (mapNeighbors(position).some((neighbor) => (terrain[neighbor] & 0x80) === 0)) return true;
+    }
+    return false;
+  }
+
+  function targetNearWater(position, maxDistance = 10) {
+    const visited = new Set([position]);
+    const queue = [{ position, distance: 0 }];
+    let head = 0;
+    while (head < queue.length) {
+      const current = queue[head++];
+      const neighbors = mapNeighbors(current.position);
+      if (neighbors.some((neighbor) => (terrain[neighbor] & 0x80) === 0)) return true;
+      if (current.distance >= maxDistance) continue;
+      for (const neighbor of neighbors) {
+        if (visited.has(neighbor) || (terrain[neighbor] & 0x80) === 0) continue;
+        visited.add(neighbor);
+        queue.push({ position: neighbor, distance: current.distance + 1 });
+      }
+    }
+    return false;
+  }
+
   function showMapMenu(event, position) {
     menuPosition = position;
     const bounds = gameScreen.getBoundingClientRect();
     mapMenu.hidden = false;
+    const attackButton = mapMenu.querySelector('[data-action="attack"]');
+    const boatButton = mapMenu.querySelector('[data-action="boat"]');
+    const ownerId = Number(localPlayerId.replace('player-', ''));
+    const canLaunchBoat = targetNearWater(position) && playerHasWaterBorder(ownerId);
+    boatButton.hidden = !canLaunchBoat;
     // Clamp so the menu never opens off the edge of the screen.
-    const width = mapMenu.offsetWidth || 96;
-    const height = mapMenu.offsetHeight || 64;
-    const x = Math.min(event.clientX - bounds.left, bounds.width - width - 4);
-    const y = Math.min(event.clientY - bounds.top, bounds.height - height - 4);
-    mapMenu.style.left = `${Math.max(4, x)}px`;
-    mapMenu.style.top = `${Math.max(4, y)}px`;
+    const width = mapMenu.offsetWidth || 34;
+    const height = mapMenu.offsetHeight || (canLaunchBoat ? 74 : 34);
+    const attackWidth = attackButton?.offsetWidth || 34;
+    const attackHeight = attackButton?.offsetHeight || 34;
+    const pointerX = event.clientX - bounds.left;
+    const pointerY = event.clientY - bounds.top;
+    const x = pointerX - attackWidth / 2;
+    const y = pointerY - attackHeight / 2;
+    mapMenu.style.left = `${Math.min(Math.max(4, x), Math.max(4, bounds.width - width - 4))}px`;
+    mapMenu.style.top = `${Math.min(Math.max(4, y), Math.max(4, bounds.height - height - 4))}px`;
   }
 
   mapFrame.addEventListener('contextmenu', function (event) {

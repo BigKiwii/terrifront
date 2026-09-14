@@ -36,8 +36,12 @@
     <button class="quit-button" id="quit-button" type="button">QUIT</button>
     <button class="cancel-button" id="cancel-button" hidden type="button">CANCEL x</button>
     <div class="map-menu" id="map-menu" role="menu" hidden>
-      <button type="button" class="map-menu-item" data-action="attack" role="menuitem">ATTACK</button>
-      <button type="button" class="map-menu-item" data-action="boat" role="menuitem">BOAT</button>
+      <button type="button" class="map-menu-item" data-action="attack" role="menuitem" aria-label="Attack" title="Attack">
+        <img src="../Assets/attack_logo.png" alt="">
+      </button>
+      <button type="button" class="map-menu-item" data-action="boat" role="menuitem" aria-label="Boat" title="Boat">
+        <img src="../Assets/boat_logo.png" alt="">
+      </button>
     </div>
     <div class="winner-banner" id="winner-banner" hidden role="status" aria-live="polite">WINNER</div>
     <div class="troop-display" id="troop-display" hidden aria-live="polite">
