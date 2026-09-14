@@ -76,6 +76,7 @@
   let displayTroops = 0;
   let targetTroops = 0;
   let leaderboardAt = 0;
+  let playerMap = new Map();
   let sceneDirty = true;
   let dynamicLayerDirty = true;
   let labelsDirty = true;
@@ -639,6 +640,10 @@
     list.scrollTop = scrollTop;
   }
 
+  function rebuildPlayerMap() {
+    playerMap = new Map((gameData?.players || []).map((player) => [player.playerId, player]));
+  }
+
   function updateLocalTroops(player) {
     if (!player) return;
     targetTroops = player.troops || 0;
@@ -976,6 +981,7 @@
       localPlayerId = data.playerId;
       activeGame = false;
       gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
+      rebuildPlayerMap();
       gameData.owners = new Int32Array(data.map.width * data.map.height);
       territoryCanvas.width = data.map.width;
       territoryCanvas.height = data.map.height;
@@ -1081,6 +1087,7 @@
       spawnMessage.textContent = 'GAME ACTIVE // CAPITAL SECURED';
       if (data.players) {
         gameData.players = data.players;
+        rebuildPlayerMap();
         data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
         for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
         rebuildTerritoryLayer();
@@ -1102,7 +1109,7 @@
       boatActionHandler = handler;
     },
     applyGameUpdate(data) {
-      const localPlayerBeforeAlive = gameData.players.find((player) => player.playerId === localPlayerId)?.isAlive !== false;
+      const localPlayerBeforeAlive = (gameData?.players || []).find((player) => player.playerId === localPlayerId)?.isAlive !== false;
       const now = performance.now();
       if (lastPacketAt) {
         const gap = now - lastPacketAt;
@@ -1113,17 +1120,39 @@
       boats = data.boats || [];
       if (hadBoats || boats.length) invalidateDynamic();
       queueChanges(data.changes);
+      let leaderboardDirty = false;
+      if (!playerMap.size && gameData?.players?.length) rebuildPlayerMap();
       for (const player of data.players || []) {
-        const current = gameData.players.find((item) => item.playerId === player.playerId);
+        const current = playerMap.get(player.playerId);
+        const previous = current ? {
+          troops: current.troops,
+          territorySize: current.territorySize,
+          isAlive: current.isAlive,
+          isWinner: current.isWinner,
+          expansionActive: current.expansionActive
+        } : null;
         if (current) Object.assign(current, player);
         else {
-          gameData.players.push({ ...player });
+          const nextPlayer = { ...player };
+          playerMap.set(player.playerId, nextPlayer);
+          gameData.players.push(nextPlayer);
           const ownerId = Number(player.playerId.replace('player-', ''));
           if (player.capitalColor) playerColors.set(ownerId, player.capitalColor);
+          leaderboardDirty = true;
+        }
+        if (current && (
+          previous.troops !== player.troops ||
+          previous.territorySize !== player.territorySize ||
+          previous.isAlive !== player.isAlive ||
+          previous.isWinner !== player.isWinner ||
+          previous.expansionActive !== player.expansionActive
+        )) {
+          leaderboardDirty = true;
         }
         if (player.playerId === localPlayerId) updateLocalTroops(current || player);
       }
-      const localPlayerAfter = gameData.players.find((player) => player.playerId === localPlayerId);
+      gameData.players = Array.from(playerMap.values());
+      const localPlayerAfter = playerMap.get(localPlayerId) || (gameData?.players || []).find((player) => player.playerId === localPlayerId);
       if (!localPlayerEliminated && localPlayerBeforeAlive && localPlayerAfter?.isAlive === false) {
         localPlayerEliminated = true;
         winnerBanner.textContent = 'LOST';
@@ -1146,7 +1175,7 @@
         animateMapToCenter();
       }
       updateRatioDisplay();
-      renderLeaderboard();
+      if (leaderboardDirty) renderLeaderboard();
       labelsDirty = true;
       if (!renderLoopRunning) draw();
     },

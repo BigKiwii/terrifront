@@ -10,11 +10,11 @@ const MinHeap = require('./min-heap');
 const MAX_POWER = 1000;
 const BOAT_SHORE_BUFFER_TILES = 3;
 const BOAT_SHORE_PENALTY = 12;
+const MAX_BOATS_PER_PLAYER = 3;
 
 // Pathfinding scratch shared by every room. Searches are synchronous and never
 // interleave, and all rooms use the same map size, so one pair of buffers is
-// enough - the arrays are several MB each and are only touched while a boat is
-// being launched. The stamp lives here too, so rooms cannot collide.
+// enough.
 let scratch = null;
 function getScratch(cellCount) {
   if (!scratch || scratch.visited.length !== cellCount) {
@@ -29,9 +29,6 @@ function getScratch(cellCount) {
   return scratch;
 }
 
-// Ferries troops across water to a coast the player cannot reach by land.
-// A boat follows a water route tile by tile, bleeding troops the whole way, and
-// on arrival claims a beachhead and hands the survivors to a normal expansion.
 class BoatManager {
   constructor(map, territory, players, expansionManager) {
     this.map = map;
@@ -40,9 +37,34 @@ class BoatManager {
     this.expansionManager = expansionManager;
     this.boats = new Map();
     this.nextBoatId = 1;
+    this.activeBoatOwners = new Set();
+    this.shoreDistance = null;
 
-    // Stamped scratch so a search never has to clear 600k entries.
     this.scratch = getScratch(map.cellCount);
+    this.buildShoreDistance();
+  }
+
+  buildShoreDistance() {
+    if (this.shoreDistance) return;
+    const cellCount = this.map.cellCount;
+    const distances = new Uint8Array(cellCount).fill(255);
+    const queue = [];
+    for (let position = 0; position < cellCount; position += 1) {
+      if (!this.map.isLand(position)) continue;
+      distances[position] = 0;
+      queue.push(position);
+    }
+    let head = 0;
+    while (head < queue.length) {
+      const position = queue[head++];
+      const currentDistance = distances[position];
+      for (const neighbor of this.map.getNeighbors(position)) {
+        if (distances[neighbor] !== 255) continue;
+        distances[neighbor] = currentDistance + 1;
+        queue.push(neighbor);
+      }
+    }
+    this.shoreDistance = distances;
   }
 
   isWater(position) {
@@ -74,15 +96,40 @@ class BoatManager {
     return neighbors;
   }
 
+  waterNeighborsAround(position) {
+    const width = this.map.width;
+    const height = this.map.height;
+    const x = position % width;
+    const y = Math.floor(position / width);
+    const neighbors = [];
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        if (offsetX === 0 && offsetY === 0) continue;
+        const nextX = x + offsetX;
+        const nextY = y + offsetY;
+        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
+        const nextPosition = nextY * width + nextX;
+        if (this.isWater(nextPosition)) {
+          neighbors.push({ position: nextPosition, cost: offsetX === 0 || offsetY === 0 ? 1 : Math.SQRT2 });
+        }
+      }
+    }
+    return neighbors;
+  }
+
   touchesWater(position) {
     return this.map.getNeighbors(position).some((neighbor) => this.isWater(neighbor));
   }
 
-  // The clicked tile if it is on the coast, otherwise the nearest coastal tile
-  // to it, so clicking inland across a sea still picks a sensible beach.
+  heuristicDistance(position, goalX, goalY) {
+    const x = position % this.map.width;
+    const y = Math.floor(position / this.map.width);
+    return Math.hypot(x - goalX, y - goalY);
+  }
+
   findLanding(targetPosition) {
     if (this.map.isLand(targetPosition) && this.touchesWater(targetPosition)) return targetPosition;
-    const { visited, parent } = this.scratch;
+    const { visited } = this.scratch;
     const stamp = ++this.scratch.stamp;
     const queue = [targetPosition];
     visited[targetPosition] = stamp;
@@ -94,7 +141,6 @@ class BoatManager {
       if (this.map.isLand(position) && this.touchesWater(position)) return position;
       for (const neighbor of this.map.getNeighbors(position)) {
         if (visited[neighbor] === stamp) continue;
-        if (!this.map.isLand(neighbor)) continue;
         visited[neighbor] = stamp;
         queue.push(neighbor);
       }
@@ -102,7 +148,6 @@ class BoatManager {
     return null;
   }
 
-  // Shortest water route from any coast this player owns to the landing beach.
   findRoute(ownerId, landing) {
     const goals = new Set();
     for (const neighbor of this.waterNeighborsAround(landing)) {
@@ -110,18 +155,23 @@ class BoatManager {
     }
     if (goals.size === 0) return null;
 
+    const goalCell = [...goals][0];
+    const goalX = goalCell % this.map.width;
+    const goalY = Math.floor(goalCell / this.map.width);
+
     const { visited, parent, distance, score } = this.scratch;
     const stamp = ++this.scratch.stamp;
     const queue = new MinHeap();
     for (const border of this.territory.getBorderSet(ownerId)) {
       if (this.map.owners[border] !== ownerId) continue;
       for (const { position: neighbor } of this.waterNeighborsAround(border)) {
+        if (this.map.owners[border] !== ownerId) continue;
         if (visited[neighbor] === stamp) continue;
         visited[neighbor] = stamp;
         parent[neighbor] = -1;
         distance[neighbor] = 0;
-        score[neighbor] = 0;
-        queue.push({ position: neighbor, priority: 0 });
+        score[neighbor] = this.heuristicDistance(neighbor, goalX, goalY);
+        queue.push({ position: neighbor, priority: score[neighbor] });
       }
     }
     if (queue.size === 0) return null;
@@ -140,7 +190,8 @@ class BoatManager {
       }
       for (const { position: neighbor, cost } of this.waterNeighbors(position)) {
         const nextDistance = distance[position] + cost;
-        const nextScore = score[position] + cost + this.shorePenalty(neighbor, landing, goals);
+        const heuristic = this.heuristicDistance(neighbor, goalX, goalY);
+        const nextScore = nextDistance + heuristic + this.shorePenalty(neighbor, landing, goals);
         if (visited[neighbor] === stamp && nextScore >= score[neighbor]) continue;
         visited[neighbor] = stamp;
         distance[neighbor] = nextDistance;
@@ -152,52 +203,13 @@ class BoatManager {
     return null;
   }
 
-  waterNeighborsAround(position) {
-    const width = this.map.width;
-    const height = this.map.height;
-    const x = position % width;
-    const y = Math.floor(position / width);
-    const neighbors = [];
-    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-        if (offsetX === 0 && offsetY === 0) continue;
-        const nextX = x + offsetX;
-        const nextY = y + offsetY;
-        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
-        const nextPosition = nextY * width + nextX;
-        if (this.isWater(nextPosition)) neighbors.push({ position: nextPosition, cost: offsetX === 0 || offsetY === 0 ? 1 : Math.SQRT2 });
-      }
-    }
-    return neighbors;
-  }
-
   shorePenalty(position, landing, goals) {
     if (goals.has(position)) return 0;
-    const width = this.map.width;
-    const height = this.map.height;
-    const x = position % width;
-    const y = Math.floor(position / width);
-    let nearestLand = BOAT_SHORE_BUFFER_TILES + 1;
-    for (let offsetY = -BOAT_SHORE_BUFFER_TILES; offsetY <= BOAT_SHORE_BUFFER_TILES; offsetY += 1) {
-      for (let offsetX = -BOAT_SHORE_BUFFER_TILES; offsetX <= BOAT_SHORE_BUFFER_TILES; offsetX += 1) {
-        if (offsetX === 0 && offsetY === 0) continue;
-        const nextX = x + offsetX;
-        const nextY = y + offsetY;
-        if (nextX < 0 || nextX >= width || nextY < 0 || nextY >= height) continue;
-        const neighbor = nextY * width + nextX;
-        if (neighbor === landing || !this.map.isLand(neighbor)) continue;
-        nearestLand = Math.min(nearestLand, Math.max(Math.abs(offsetX), Math.abs(offsetY)));
-      }
-    }
-    return nearestLand > BOAT_SHORE_BUFFER_TILES
-      ? 0
-      : (BOAT_SHORE_BUFFER_TILES + 1 - nearestLand) ** 2 * BOAT_SHORE_PENALTY;
+    const distanceValue = this.shoreDistance?.[position] ?? BOAT_SHORE_BUFFER_TILES + 1;
+    if (distanceValue > BOAT_SHORE_BUFFER_TILES) return 0;
+    return (BOAT_SHORE_BUFFER_TILES + 1 - distanceValue) ** 2 * BOAT_SHORE_PENALTY;
   }
 
-  // The owned tiles a landing party can attack from: the connected pocket of our
-  // territory containing the beachhead. After a sea landing that is usually just
-  // the beach itself, so the push stays local instead of firing every front we
-  // own. If the beach does touch ground we already held, that whole pocket joins.
   frontFrom(landing, ownerId) {
     const { visited } = this.scratch;
     const stamp = ++this.scratch.stamp;
@@ -214,8 +226,12 @@ class BoatManager {
         queue.push(neighbor);
       }
     }
-    // Hit the cap: this is a big contiguous nation, so the normal whole-border
-    // front is what we want anyway.
+    const isAlreadyConnected = this.map.getNeighbors(landing).some((neighbor) => {
+      if (this.map.owners[neighbor] !== ownerId) return false;
+      const localConnections = this.map.getNeighbors(neighbor).filter((cell) => this.map.owners[cell] === ownerId).length;
+      return localConnections > 1;
+    });
+    if (isAlreadyConnected) return null;
     return front.length >= BOAT_MAX_FRONT_TILES ? null : front;
   }
 
@@ -224,6 +240,7 @@ class BoatManager {
     if (!player) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
     const ownerId = Number(playerId.replace('player-', ''));
     if (this.territory.getTerritorySize(ownerId) === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
+    if (this.getActiveCount(playerId) >= MAX_BOATS_PER_PLAYER) return { accepted: false, reason: 'NO_WATER_ROUTE' };
 
     const landing = this.findLanding(targetPosition);
     if (landing === null || this.map.owners[landing] === ownerId) {
@@ -234,7 +251,8 @@ class BoatManager {
     const { route, distance } = routeResult;
 
     const normalizedPower = Math.max(0, Math.min(MAX_POWER, Number(power) || 0));
-    const troops = Math.min(player.troops, Math.floor(player.troops * normalizedPower / MAX_POWER));
+    const troopRatio = normalizedPower / MAX_POWER;
+    const troops = Math.min(player.troops, Math.max(1, Math.floor(player.troops * troopRatio)));
     if (troops < BOAT_MIN_TROOPS) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
 
     player.troops = Math.max(0, player.troops - troops);
@@ -248,7 +266,16 @@ class BoatManager {
       landing
     };
     this.boats.set(boat.id, boat);
-    return { accepted: true, playerId, troops, power: normalizedPower, boat: true, distance };
+    this.activeBoatOwners.add(playerId);
+    return {
+      accepted: true,
+      playerId,
+      troops,
+      power: normalizedPower,
+      boat: true,
+      distance,
+      expectedSurvivors: Math.floor(troops * Math.pow(1 - BOAT_DECAY_PER_TICK, distance / BOAT_TILES_PER_TICK))
+    };
   }
 
   tick() {
@@ -269,20 +296,19 @@ class BoatManager {
       finished.push(boat);
     }
 
-    for (const boat of finished) this.boats.delete(boat.id);
+    for (const boat of finished) {
+      this.boats.delete(boat.id);
+      this.activeBoatOwners.delete(boat.playerId);
+      if (this.getActiveCount(boat.playerId) === 0) this.activeBoatOwners.delete(boat.playerId);
+    }
     return changes;
   }
 
-  // Take the beach, then let the normal expansion logic carry on inland.
   land(boat) {
     const { landing, ownerId } = boat;
     const player = this.players.get(boat.playerId);
-    // A player wiped out while their boat was at sea does not get to land and
-    // come back from the dead.
     if (this.territory.getTerritorySize(ownerId) === 0) return null;
     const defenderId = this.map.owners[landing];
-    // We took this beach by land while the boat was still crossing; bring the
-    // cargo home rather than losing it.
     if (defenderId === ownerId) {
       if (player) player.troops += Math.floor(boat.troops);
       return null;
@@ -302,19 +328,12 @@ class BoatManager {
 
     const survivors = troops - cost;
     if (player && survivors > 0) {
-      player.troops += survivors;
-      // Push inland with the landing party only. start() spends a percentage of
-      // the player's whole pool, so express the survivors as that percentage and
-      // round down - a landing must never spend troops that stayed at home.
-      const power = Math.floor((survivors / player.troops) * MAX_POWER);
-      if (power >= 1) {
-        this.expansionManager.start(
-          boat.playerId,
-          power,
-          this.inlandTarget(landing, ownerId),
-          this.frontFrom(landing, ownerId)
-        );
-      }
+      this.expansionManager.startWithTroops(
+        boat.playerId,
+        survivors,
+        this.inlandTarget(landing, ownerId),
+        this.frontFrom(landing, ownerId)
+      );
     }
     return { position: landing, owner: ownerId };
   }
@@ -327,7 +346,8 @@ class BoatManager {
     const defender = this.players.get(`player-${defenderId}`);
     if (!defender) return 1;
     const size = Math.max(1, this.territory.getTerritorySize(defenderId));
-    return Math.max(1, Math.floor((defender.troops / size) * 2));
+    const localSupport = this.map.getNeighbors(landing).filter((cell) => this.map.owners[cell] === defenderId).length;
+    return Math.max(1, Math.floor((defender.troops / size) * (1 + localSupport * 0.75)));
   }
 
   inlandTarget(landing, ownerId) {
@@ -347,18 +367,27 @@ class BoatManager {
     for (const boat of [...this.boats.values()]) {
       if (boat.playerId !== playerId) continue;
       const player = this.players.get(playerId);
-      if (player) player.troops += Math.floor(boat.troops);   // recalled before landing
+      if (player) player.troops += Math.floor(boat.troops);
       this.boats.delete(boat.id);
     }
+    this.activeBoatOwners.delete(playerId);
   }
 
   stopAll() {
     this.boats.clear();
+    this.activeBoatOwners.clear();
   }
 
   releaseOwner(ownerId) {
     for (const boat of [...this.boats.values()]) {
-      if (boat.ownerId === ownerId) this.boats.delete(boat.id);
+      if (boat.ownerId === ownerId) {
+        this.boats.delete(boat.id);
+      }
+    }
+    if (this.activeBoatOwners.size > 0) {
+      for (const playerId of this.activeBoatOwners) {
+        if (this.getActiveCount(playerId) === 0) this.activeBoatOwners.delete(playerId);
+      }
     }
   }
 

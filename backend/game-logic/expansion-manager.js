@@ -20,6 +20,15 @@ class ExpansionManager {
     const normalizedPower = Math.max(0, Math.min(MAX_POWER, Number(power) || 0));
     const troops = Math.min(player.troops, Math.floor(player.troops * normalizedPower / MAX_POWER));
     if (troops < 1) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
+    return this.startWithTroops(playerId, troops, targetPosition, frontTiles);
+  }
+
+  startWithTroops(playerId, troops, targetPosition = null, frontTiles = null) {
+    const player = this.players.get(playerId);
+    if (!player) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
+    const ownerId = Number(playerId.replace('player-', ''));
+    const exactTroops = Math.max(0, Math.min(player.troops, Number(troops) || 0));
+    if (exactTroops < 1) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
 
     const targetOwnerId = targetPosition === null ? 0 : this.map.owners[targetPosition] || 0;
     const attack = {
@@ -27,7 +36,7 @@ class ExpansionManager {
       playerId,
       ownerId,
       targetOwnerId,
-      troops,
+      troops: exactTroops,
       tileQueue: new Map(),
       queueSlot: 0,
       scheduledTiles: 0,
@@ -39,10 +48,10 @@ class ExpansionManager {
     const candidates = this.getAttackCandidates(attack);
     if (candidates.length === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
 
-    player.troops = Math.max(0, player.troops - troops);
+    player.troops = Math.max(0, player.troops - exactTroops);
     this.attacks.set(attack.id, attack);
     this.scheduleCandidates(attack, candidates);
-    return { accepted: true, playerId, troops, power: normalizedPower };
+    return { accepted: true, playerId, troops: exactTroops };
   }
 
   tick() {

@@ -33,7 +33,16 @@ class GameEngine {
     if (!this.territoryManager) this.territoryManager = new TerritoryManager(this.map);
     if (!this.expansionManager) this.expansionManager = new ExpansionManager(this.map, this.territoryManager, this.players);
     if (!this.boatManager) this.boatManager = new BoatManager(this.map, this.territoryManager, this.players, this.expansionManager);
-    this.players.set(playerId, { playerId, name: playerName, troops: 0, spawnPosition: null, spawnCells: [], capitalColor: null, isBot });
+    this.players.set(playerId, {
+      playerId,
+      name: playerName,
+      troops: 0,
+      spawnPosition: null,
+      spawnCells: [],
+      capitalColor: null,
+      isBot,
+      _sent: { troops: -1, territorySize: -1, flags: -1 }
+    });
 
     return {
       gameId: this.gameId,
@@ -227,23 +236,63 @@ class GameEngine {
     };
   }
 
+  getPlayerSnapshot(player) {
+    const ownerId = Number(player.playerId.replace('player-', ''));
+    const territorySize = this.territoryManager?.getTerritorySize(ownerId) || 0;
+    const expansionActive = this.expansionManager?.isActive(player.playerId) || this.boatManager?.getActiveCount(player.playerId) > 0 || false;
+    const isAlive = territorySize > 0;
+    const isWinner = player.playerId === this.winnerId;
+    const flags = (player.isBot ? 1 : 0) |
+      (isAlive ? 2 : 0) |
+      (isWinner ? 4 : 0) |
+      (expansionActive ? 8 : 0);
+
+    return {
+      playerId: player.playerId,
+      playerName: player.name,
+      troops: player.troops,
+      territorySize,
+      expansionActive,
+      isBot: player.isBot,
+      isWinner,
+      spawnPosition: player.spawnPosition,
+      capitalColor: player.capitalColor,
+      isAlive,
+      flags
+    };
+  }
+
   getTickState(changes) {
+    const players = [];
+    for (const player of this.players.values()) {
+      const snapshot = this.getPlayerSnapshot(player);
+      const previous = player._sent || { troops: -1, territorySize: -1, flags: -1 };
+      if (snapshot.troops !== previous.troops || snapshot.territorySize !== previous.territorySize || snapshot.flags !== previous.flags) {
+        players.push({
+          playerId: snapshot.playerId,
+          playerName: snapshot.playerName,
+          troops: snapshot.troops,
+          territorySize: snapshot.territorySize,
+          expansionActive: snapshot.expansionActive,
+          isBot: snapshot.isBot,
+          isWinner: snapshot.isWinner,
+          spawnPosition: snapshot.spawnPosition,
+          capitalColor: snapshot.capitalColor,
+          isAlive: snapshot.isAlive
+        });
+        player._sent = {
+          troops: snapshot.troops,
+          territorySize: snapshot.territorySize,
+          flags: snapshot.flags
+        };
+      }
+    }
+
     return {
       gameId: this.gameId,
       tickCount: this.tickCount,
       changes,
-      players: [...this.players.values()].map((player) => ({
-        playerId: player.playerId,
-        playerName: player.name,
-        troops: player.troops,
-        territorySize: this.territoryManager.getTerritorySize(Number(player.playerId.replace('player-', ''))),
-        expansionActive: this.expansionManager.isActive(player.playerId) || this.boatManager.getActiveCount(player.playerId) > 0,
-        isBot: player.isBot,
-        isWinner: player.playerId === this.winnerId,
-        spawnPosition: player.spawnPosition,
-        capitalColor: player.capitalColor,
-        isAlive: this.territoryManager.getTerritorySize(Number(player.playerId.replace('player-', ''))) > 0
-      })),
+      players,
       boats: this.boatManager.serialize(),
       winnerId: this.winnerId
     };
