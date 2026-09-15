@@ -3,7 +3,7 @@ const SIMULATION_TICK_MS = 50;
 const ECONOMY_TICKS_PER_SECOND = 10;
 const ECONOMY_CYCLE_SECONDS = 10;
 const NAME_DISPLAY_TERRITORY = 50;
-const BOT_COUNT = 250;
+const BOT_COUNT = 50;
 
 // Boating: troops ferried across water lose strength every tick, so long
 // crossings cost far more than short hops between neighbouring coasts.
