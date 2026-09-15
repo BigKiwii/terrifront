@@ -29,8 +29,6 @@
   const winnerBanner = document.querySelector('#winner-banner');
   const attackRatioPanel = document.querySelector('#attack-ratio-panel');
   const powerSlider = document.querySelector('#power-slider');
-  const ratioPercent = document.querySelector('#ratio-percent');
-  const ratioTroops = document.querySelector('#ratio-troops');
   const context = canvas.getContext('2d', { willReadFrequently: true });
   const dynamicContext = dynamicCanvas.getContext('2d');
   const terrainCanvas = document.createElement('canvas');
@@ -108,19 +106,21 @@
   function updatePowerSlider() {
     const percentage = Math.round(currentPower / 10);
     powerSlider.value = percentage;
-    powerSlider.style.setProperty('--slider-fill', `${percentage}%`);
-    powerSlider.classList.toggle('is-aggressive', percentage > 70);
+    updateRatioDisplay();
   }
 
   function updateRatioDisplay() {
     const percentage = Number(powerSlider.value);
     currentPower = percentage * 10;
-    powerSlider.style.setProperty('--slider-fill', `${percentage}%`);
-    powerSlider.classList.toggle('is-aggressive', percentage > 70);
-    ratioPercent.textContent = `${percentage}%`;
+    const fill = document.getElementById('ratio-bar-fill');
+    const label = document.getElementById('ratio-bar-label');
+    if (fill) {
+      fill.style.width = `${percentage}%`;
+      fill.classList.toggle('is-aggressive', percentage > 70);
+    }
     const localPlayer = gameData?.players?.find((player) => player.playerId === localPlayerId);
     const troops = Math.floor((localPlayer?.troops || 0) * percentage / 100);
-    ratioTroops.textContent = `${formatTroops(troops)} troops`;
+    if (label) label.textContent = `${formatTroops(troops)} (${percentage}%)`;
   }
 
   function resetInterpolation() {
@@ -631,6 +631,19 @@
       troopCount.textContent = formatTroops(targetTroops);
     }
     territoryCount.textContent = player.territorySize || 0;
+    const selectorTroopCount = document.getElementById('selector-troop-count');
+    const selectorTerritory = document.getElementById('selector-territory');
+    const selectorDensity = document.getElementById('selector-density');
+    const selectorStats = document.getElementById('selector-stats');
+    if (selectorStats) selectorStats.hidden = false;
+    if (selectorTroopCount) selectorTroopCount.textContent = formatTroops(player.troops || 0);
+    if (selectorTerritory) selectorTerritory.textContent = formatTroops(player.territorySize || 0);
+    if (selectorDensity) {
+      const density = player.territorySize > 0
+        ? (player.troops / player.territorySize).toFixed(2)
+        : '0.00';
+      selectorDensity.textContent = density;
+    }
     troopDisplay.classList.toggle('is-attacking', Boolean(player.expansionActive));
     cancelButton.hidden = !player.expansionActive;
     updateRatioDisplay();
@@ -991,6 +1004,46 @@
     updateRatioDisplay();
   });
 
+  const ratioTrack = document.querySelector('.ratio-bar-track');
+  if (ratioTrack) {
+    function ratioFromEvent(event) {
+      const rect = ratioTrack.getBoundingClientRect();
+      const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+      return Math.max(1, Math.round(ratio * 100));
+    }
+    let draggingRatio = false;
+    ratioTrack.addEventListener('pointerdown', (event) => {
+      draggingRatio = true;
+      ratioTrack.setPointerCapture(event.pointerId);
+      powerSlider.value = ratioFromEvent(event);
+      updateRatioDisplay();
+    });
+    ratioTrack.addEventListener('pointermove', (event) => {
+      if (!draggingRatio) return;
+      powerSlider.value = ratioFromEvent(event);
+      updateRatioDisplay();
+    });
+    ratioTrack.addEventListener('pointerup', () => {
+      draggingRatio = false;
+      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
+    });
+    ratioTrack.addEventListener('pointercancel', () => {
+      draggingRatio = false;
+      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
+    });
+  }
+
+  document.getElementById('ratio-minus')?.addEventListener('click', () => {
+    powerSlider.value = Math.max(1, Number(powerSlider.value) - 5);
+    localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
+    updateRatioDisplay();
+  });
+  document.getElementById('ratio-plus')?.addEventListener('click', () => {
+    powerSlider.value = Math.min(100, Number(powerSlider.value) + 5);
+    localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
+    updateRatioDisplay();
+  });
+
   cancelButton.addEventListener('click', function () {
     window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId));
     cancelButton.hidden = true;
@@ -1075,6 +1128,7 @@
     beginSpawnPhase(data) {
       activeGame = false;
       troopDisplay.hidden = true;
+      document.getElementById('selector-stats').hidden = true;
       attackRatioPanel.hidden = true;
       leaderboard.hidden = true;
       spawnPhase = data;

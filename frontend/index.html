@@ -67,14 +67,24 @@
       <strong><span aria-hidden="true">⚔</span> <b id="troop-count">0</b> troops</strong>
       <span><span aria-hidden="true">▦</span> <b id="territory-count">0</b> tiles</span>
     </div>
+    <div class="selector-stats" id="selector-stats" hidden>
+      <div class="selector-troops">
+        <span class="selector-troops-icon">⚔</span>
+        <span id="selector-troop-count">0</span>
+      </div>
+      <div class="selector-meta">
+        <span>▦ <b id="selector-territory">0</b></span>
+        <span>⬡ <b id="selector-density">0.00</b></span>
+      </div>
+    </div>
     <div class="attack-ratio-panel" id="attack-ratio-panel" hidden>
-      <div class="ratio-bar-wrap">
-        <input id="power-slider" class="power-slider" type="range" min="1" max="100" value="50" step="1" aria-label="Attack ratio">
+      <button class="ratio-btn ratio-btn-minus" id="ratio-minus" aria-label="Decrease">-</button>
+      <div class="ratio-bar-track" id="ratio-track">
+        <div class="ratio-bar-fill" id="ratio-bar-fill"></div>
+        <span class="ratio-bar-label" id="ratio-bar-label">0 troops (50%)</span>
       </div>
-      <div class="ratio-labels">
-        <span id="ratio-percent">50%</span>
-        <span id="ratio-troops">0 troops</span>
-      </div>
+      <button class="ratio-btn ratio-btn-plus" id="ratio-plus" aria-label="Increase">+</button>
+      <input id="power-slider" class="power-slider-hidden" type="range" min="1" max="100" value="50" step="1" aria-label="Attack ratio">
     </div>
     <div class="leaderboard" id="leaderboard" hidden aria-label="Player leaderboard"></div>
     <div class="spawn-hud" id="spawn-hud" hidden>
