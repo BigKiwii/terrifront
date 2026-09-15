@@ -2,45 +2,46 @@
   'use strict';
 
   const modules = window.TerriGameModules || {};
-  const domElements = modules.domElements;
   const mapGeometry = modules.mapGeometry;
   const colorUtils = modules.colorUtils;
-  const capitalRenderer = modules.capitalRenderer;
-  const webglRenderer = modules.webglRenderer;
-  const cameraController = modules.cameraController;
   const gameStore = modules.gameStore;
-  if (!domElements || !mapGeometry || !colorUtils || !capitalRenderer || !webglRenderer || !cameraController || !gameStore) throw new Error('TerriGameUI modules are not loaded');
+  if (!mapGeometry || !colorUtils || !gameStore) throw new Error('TerriGameUI modules are not loaded');
   const store = gameStore.createGameStore();
   const renderState = store.render;
   const playerColors = store.playerColors;
   const playerMap = store.playerMap;
   const boats = store.boats;
 
-  const {
-    canvas,
-    dynamicCanvas,
-    mapFrame,
-    gameScreen,
-    mapMenu,
-    spawnHud,
-    spawnTime,
-    progressBar,
-    spawnMessage,
-    troopDisplay,
-    troopCount,
-    territoryCount,
-    leaderboard,
-    cancelButton,
-    winnerBanner,
-    attackRatioPanel,
-    powerSlider,
-    ratioPercent,
-    ratioTroops
-  } = domElements.getGameDom();
-  const renderer = webglRenderer.createMapRenderer(canvas);
+  const canvas = document.querySelector('#game-canvas');
+  const dynamicCanvas = document.querySelector('#dynamic-canvas');
+  const mapFrame = document.querySelector('.map-frame');
+  const gameScreen = document.querySelector('#game-screen');
+  const mapMenu = document.querySelector('#map-menu');
+  const spawnHud = document.querySelector('#spawn-hud');
+  const spawnTime = document.querySelector('#spawn-time');
+  const progressBar = document.querySelector('#spawn-progress-bar');
+  const spawnMessage = document.querySelector('#spawn-message');
+  const troopDisplay = document.querySelector('#troop-display');
+  const troopCount = document.querySelector('#troop-count');
+  const territoryCount = document.querySelector('#territory-count');
+  const leaderboard = document.querySelector('#leaderboard');
+  const cancelButton = document.querySelector('#cancel-button');
+  const winnerBanner = document.querySelector('#winner-banner');
+  const attackRatioPanel = document.querySelector('#attack-ratio-panel');
+  const powerSlider = document.querySelector('#power-slider');
+  const ratioPercent = document.querySelector('#ratio-percent');
+  const ratioTroops = document.querySelector('#ratio-troops');
+  const context = canvas.getContext('2d', { willReadFrequently: true });
   const dynamicContext = dynamicCanvas.getContext('2d');
+  const terrainCanvas = document.createElement('canvas');
+  const terrainContext = terrainCanvas.getContext('2d');
+  const territoryCanvas = document.createElement('canvas');
+  const territoryContext = territoryCanvas.getContext('2d');
+  const sceneCanvas = document.createElement('canvas');
+  const sceneContext = sceneCanvas.getContext('2d');
   const renderScale = 1;
   TerriPlayerLabelRenderer.init(document.querySelector('#game-screen'), canvas);
+  let gameData = null;
   let zoom = 1;
   let panX = 0;
   let panY = 0;
@@ -49,21 +50,33 @@
   const activePointers = new Map();
   let pinchState = null;
   let spawnPhase = null;
+  let selectedPosition = null;
+  let selectedColor = '#69c878';
   let spawnSubmitHandler = null;
   let timerHandle = null;
+  let terrain = null;
+  let expansionTimes = null;
   let selectionLocked = false;
+  let localPlayerId = null;
   let activeGame = false;
   let mapActionHandler = null;
   let boatActionHandler = null;
   let menuPosition = null;
   let mapScale = 1;
-  let playerColorCache = colorUtils.createColorCache();
+  let hoverPosition = null;
+  let playerColorCache = new Map();
+  let localCapitalCells = new Set();
+  let selectedSpawnCells = [];
+  let confirmedPosition = null;
   let currentPower = 500;
+  let territoryVersion = 0;
+  let eliminationAnimationFrame = null;
   let localPlayerEliminated = false;
   let localPlayerWon = false;
   const TROOP_SMOOTHING_MS = 90;
   const LEADERBOARD_INTERVAL_MS = 250;
   const LABEL_UPDATE_INTERVAL_MS = 250;
+  const PLAYER_FOCUS_ZOOM = 4;
   let pendingChanges = [];
   let pendingHead = 0;
   let drainRate = 0;
@@ -76,31 +89,13 @@
   let targetTroops = 0;
   let leaderboardAt = 0;
 
+  let territoryImageData = null;
   let localWaterBorderVersion = -1;
   let localPlayerHasWaterBorder = false;
   let lastLabelDrawAt = 0;
   let labelDrawFrame = null;
   let canvasResizeFrame = null;
   let gameSessionId = 0;
-
-  const camera = cameraController.createCameraController({
-    mapFrame,
-    canvas,
-    getState: () => ({ zoom, panX, panY }),
-    setState: (state) => {
-      zoom = state.zoom;
-      panX = state.panX;
-      panY = state.panY;
-    },
-    getMapSize: () => ({ width: store.gameData?.map.width || 1, height: store.gameData?.map.height || 1 }),
-    getLabelCenter: (playerId, version) => TerriPlayerLabelRenderer.getLabelCenter(playerId, store.gameData, version),
-    onTransform: () => {
-      renderState.labelsCameraDirty = true;
-      hideMapMenu();
-      TerriPlayerLabelRenderer.invalidateLayout();
-      scheduleLabelDraw();
-    }
-  });
 
   function clamp(value, minimum, maximum) {
     return Math.min(Math.max(value, minimum), maximum);
@@ -123,7 +118,7 @@
     powerSlider.style.setProperty('--slider-fill', `${percentage}%`);
     powerSlider.classList.toggle('is-aggressive', percentage > 70);
     ratioPercent.textContent = `${percentage}%`;
-    const localPlayer = store.gameData?.players?.find((player) => player.playerId === store.localPlayerId);
+    const localPlayer = gameData?.players?.find((player) => player.playerId === localPlayerId);
     const troops = Math.floor((localPlayer?.troops || 0) * percentage / 100);
     ratioTroops.textContent = `${formatTroops(troops)} troops`;
   }
@@ -157,7 +152,7 @@
     const applied = [];
     while (pendingHead < pendingChanges.length && budget > 0) {
       const change = pendingChanges[pendingHead++];
-      store.gameData.owners[change.position] = change.owner;
+      gameData.owners[change.position] = change.owner;
       applied.push(change);
       budget -= 1;
     }
@@ -170,7 +165,7 @@
     }
     if (applied.length) {
       updateTerritoryLayer(applied);
-      store.territoryVersion += 1;
+      territoryVersion += 1;
       renderState.labelsDirty = true;
     }
   }
@@ -208,18 +203,102 @@
     resetInterpolation();
     clearInterval(timerHandle);
     timerHandle = null;
-    camera.cancel();
+    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+    eliminationAnimationFrame = null;
     if (labelDrawFrame !== null) cancelAnimationFrame(labelDrawFrame);
     labelDrawFrame = null;
     if (canvasResizeFrame !== null) cancelAnimationFrame(canvasResizeFrame);
     canvasResizeFrame = null;
   }
 
+  function applyMapTransform() {
+    const maxPanX = Math.max(260, (mapFrame.clientWidth * zoom - window.innerWidth) / 2 + 100);
+    const maxPanY = Math.max(220, (mapFrame.clientHeight * zoom - window.innerHeight) / 2 + 100);
+    panX = clamp(panX, -maxPanX, maxPanX);
+    panY = clamp(panY, -maxPanY, maxPanY);
+    mapFrame.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
+    renderState.labelsCameraDirty = true;
+    hideMapMenu();
+    TerriPlayerLabelRenderer.invalidateLayout();
+    scheduleLabelDraw();
+  }
+
+  function resetMapTransform() {
+    zoom = 1;
+    panX = 0;
+    panY = 0;
+    applyMapTransform();
+  }
+
+  function animateMapToCenter() {
+    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+    dragStart = null;
+    dragMoved = false;
+    const startZoom = zoom;
+    const startPanX = panX;
+    const startPanY = panY;
+    const startedAt = performance.now();
+    const duration = 2800;
+
+    function step(now) {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      zoom = startZoom + (1 - startZoom) * eased;
+      panX = startPanX * (1 - eased);
+      panY = startPanY * (1 - eased);
+      applyMapTransform();
+      if (progress < 1) {
+        eliminationAnimationFrame = requestAnimationFrame(step);
+      } else {
+        eliminationAnimationFrame = null;
+        resetMapTransform();
+      }
+    }
+
+    eliminationAnimationFrame = requestAnimationFrame(step);
+  }
+
+  function focusPlayer(playerId) {
+    if (!gameData) return;
+    const target = TerriPlayerLabelRenderer.getLabelCenter(playerId, gameData, territoryVersion);
+    if (!target) return;
+    const mapWidth = gameData.map.width;
+    const mapHeight = gameData.map.height;
+    const targetZoom = PLAYER_FOCUS_ZOOM;
+    const targetOffsetX = canvas.offsetLeft + target.x / mapWidth * canvas.offsetWidth - mapFrame.offsetWidth / 2;
+    const targetOffsetY = canvas.offsetTop + target.y / mapHeight * canvas.offsetHeight - mapFrame.offsetHeight / 2;
+    const targetPanX = -targetOffsetX * targetZoom;
+    const targetPanY = -targetOffsetY * targetZoom;
+    const startZoom = zoom;
+    const startPanX = panX;
+    const startPanY = panY;
+    const startedAt = performance.now();
+    const duration = 650;
+    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+
+    function step(now) {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = progress < 0.5
+        ? 4 * progress * progress * progress
+        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+      zoom = startZoom + (targetZoom - startZoom) * eased;
+      panX = startPanX + (targetPanX - startPanX) * eased;
+      panY = startPanY + (targetPanY - startPanY) * eased;
+      applyMapTransform();
+      if (progress < 1) eliminationAnimationFrame = requestAnimationFrame(step);
+      else eliminationAnimationFrame = null;
+    }
+
+    eliminationAnimationFrame = requestAnimationFrame(step);
+  }
+
   function resizeCanvas() {
     if (mapFrame.clientWidth <= 10 || mapFrame.clientHeight <= 10) return false;
     TerriPlayerLabelRenderer.invalidateLayout();
-    const width = store.gameData?.map.width || 876;
-    const height = store.gameData?.map.height || 694;
+    const width = gameData?.map.width || 876;
+    const height = gameData?.map.height || 694;
     mapScale = renderScale * Math.max(1, Math.floor(window.devicePixelRatio || 1));
     canvas.style.width = `${mapFrame.clientWidth}px`;
     canvas.style.height = `${mapFrame.clientHeight}px`;
@@ -229,11 +308,13 @@
     canvas.height = Math.ceil(height * mapScale);
     dynamicCanvas.width = Math.ceil(width * mapScale);
     dynamicCanvas.height = Math.ceil(height * mapScale);
+    context.setTransform(mapScale, 0, 0, mapScale, 0, 0);
     dynamicContext.setTransform(mapScale, 0, 0, mapScale, 0, 0);
+    context.imageSmoothingEnabled = false;
     dynamicContext.imageSmoothingEnabled = false;
-    renderer.resize();
-    if (store.terrain) {
+    if (terrain) {
       buildTerrainLayer();
+      composeSceneLayer();
       draw();
     }
     return true;
@@ -248,16 +329,34 @@
         scheduleCanvasResize();
         return;
       }
-      camera.applyTransform();
+      applyMapTransform();
     });
   }
 
   function getCapitalCells(position) {
-    return mapGeometry.getCapitalCells(position, store.gameData.map.width, store.gameData.map.height);
+    return mapGeometry.getCapitalCells(position, gameData.map.width, gameData.map.height);
   }
 
   function drawCapital(position, color) {
-    capitalRenderer.drawCapital(dynamicContext, position, color, store.gameData.map.width, store.gameData.map.height);
+    if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return;
+    const centerX = position % gameData.map.width;
+    const centerY = Math.floor(position / gameData.map.width);
+    const colors = warFrontPlayerColors(color || '#69c878');
+
+    dynamicContext.fillStyle = colors.border;
+    for (let offsetY = -2; offsetY <= 2; offsetY += 1) {
+      for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
+        if (Math.abs(offsetX) === 2 && Math.abs(offsetY) === 2) continue;
+        dynamicContext.fillRect(centerX + offsetX, centerY + offsetY, 1, 1);
+      }
+    }
+
+    dynamicContext.fillStyle = colors.territory;
+    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+        dynamicContext.fillRect(centerX + offsetX, centerY + offsetY, 1, 1);
+      }
+    }
   }
 
   function decodeBytes(encoded) {
@@ -271,7 +370,7 @@
     if (window.TerriEmbeddedTerrain) {
       const decodedTerrain = decodeBytes(window.TerriEmbeddedTerrain);
       if (sessionId !== gameSessionId) return;
-      store.terrain = decodedTerrain;
+      terrain = decodedTerrain;
       buildTerrainLayer();
       draw();
       return;
@@ -283,7 +382,7 @@
     if (!response.ok) throw new Error(`Terrain request failed: ${response.status}`);
     const loadedTerrain = new Uint8Array(await response.arrayBuffer());
     if (sessionId !== gameSessionId) return;
-    store.terrain = loadedTerrain;
+    terrain = loadedTerrain;
     buildTerrainLayer();
     draw();
   }
@@ -293,7 +392,7 @@
     if (window.TerriEmbeddedExpansionTimes) {
       const decodedExpansionTimes = decodeBytes(window.TerriEmbeddedExpansionTimes);
       if (sessionId !== gameSessionId) return;
-      store.expansionTimes = decodedExpansionTimes;
+      expansionTimes = decodedExpansionTimes;
       return;
     }
     const expansionTimesUrl = window.location.protocol === 'file:'
@@ -303,19 +402,19 @@
     if (!response.ok) throw new Error(`Expansion times request failed: ${response.status}`);
     const loadedExpansionTimes = new Uint8Array(await response.arrayBuffer());
     if (sessionId !== gameSessionId) return;
-    store.expansionTimes = loadedExpansionTimes;
+    expansionTimes = loadedExpansionTimes;
   }
 
   function isValidCapital(position) {
-    if (!store.terrain) return false;
-    const centerX = position % store.gameData.map.width;
-    const centerY = Math.floor(position / store.gameData.map.width);
+    if (!terrain) return false;
+    const centerX = position % gameData.map.width;
+    const centerY = Math.floor(position / gameData.map.width);
     for (let y = centerY - 2; y <= centerY + 2; y += 1) {
       for (let x = centerX - 2; x <= centerX + 2; x += 1) {
-        if (x < 0 || x >= store.gameData.map.width || y < 0 || y >= store.gameData.map.height) return false;
+        if (x < 0 || x >= gameData.map.width || y < 0 || y >= gameData.map.height) return false;
         if (Math.abs(x - centerX) === 2 && Math.abs(y - centerY) === 2) continue;
-        const cell = y * store.gameData.map.width + x;
-        if ((store.terrain[cell] & 0x80) === 0 || store.gameData.owners[cell] !== 0) return false;
+        const cell = y * gameData.map.width + x;
+        if ((terrain[cell] & 0x80) === 0 || gameData.owners[cell] !== 0) return false;
       }
     }
     return true;
@@ -329,12 +428,29 @@
   }
 
   function buildTerrainLayer() {
-    if (!store.gameData || !store.terrain) return;
-    const width = store.gameData.map.width;
-    const height = store.gameData.map.height;
-    renderer.setTerrain(store.terrain, width, height);
-    updateRendererPalette();
-    renderState.sceneDirty = true;
+    if (!gameData || !terrain) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    terrainCanvas.width = width;
+    terrainCanvas.height = height;
+    const pixels = terrainContext.createImageData(width, height);
+    for (let position = 0; position < terrain.length; position += 1) {
+      const pixel = position * 4;
+      const land = (terrain[position] & 0x80) !== 0;
+      const magnitude = terrain[position] & 0x1f;
+      if (land) {
+        pixels.data[pixel] = 185 + Math.min(25, magnitude * 2);
+        pixels.data[pixel + 1] = 178 + Math.min(22, magnitude * 2);
+        pixels.data[pixel + 2] = 148 + Math.min(18, magnitude);
+      } else {
+        pixels.data[pixel] = 79 + Math.min(9, Math.floor(magnitude * 1.2));
+        pixels.data[pixel + 1] = 114 + Math.min(11, Math.floor(magnitude * 1.2));
+        pixels.data[pixel + 2] = 140 + Math.min(7, Math.floor(magnitude * 0.6));
+      }
+      pixels.data[pixel + 3] = 255;
+    }
+    terrainContext.putImageData(pixels, 0, 0);
+    composeSceneLayer();
   }
 
   function warFrontPlayerColors(color) {
@@ -342,42 +458,97 @@
   }
 
   function colorsForOwner(ownerId) {
-    const player = playerMap.get(`player-${ownerId}`);
-    const color = player?.isBot ? '#8b9298' : (playerColors.get(ownerId) || '#8b9298');
-    return playerColorCache(color);
+    const color = playerColors.get(ownerId) || selectedColor;
+    const cached = playerColorCache.get(ownerId);
+    if (cached?.source === color) return cached;
+    const colors = warFrontPlayerColors(color);
+    const parse = (value) => {
+      const match = value.match(/^rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)$/);
+      if (!match) return null;
+      return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] === undefined ? 255 : Math.round(Number(match[4]) * 255)];
+    };
+    const cachedColors = { source: color, colors, territoryPixel: parse(colors.territory), borderPixel: parse(colors.border) };
+    playerColorCache.set(ownerId, cachedColors);
+    return cachedColors;
   }
 
-  function setPlayerColor(player) {
-    const ownerId = Number(String(player.playerId).replace('player-', ''));
-    const color = player.isBot ? '#8b9298' : player.capitalColor;
-    if (color) playerColors.set(ownerId, color);
+  function isBorderCell(position, owner) {
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    const x = position % width;
+    const y = Math.floor(position / width);
+    return x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
+      gameData.owners[position - 1] !== owner || gameData.owners[position + 1] !== owner ||
+      gameData.owners[position - width] !== owner || gameData.owners[position + width] !== owner;
   }
 
-  function updateRendererPalette() {
-    renderer.setPalette(playerColors, '#8b9298');
+  function paintTerritoryTile(position) {
+    if (position < 0 || position >= gameData.owners.length) return;
+    const width = gameData.map.width;
+    const owner = gameData.owners[position];
+    if (!territoryImageData) return;
+    const pixel = position * 4;
+    territoryImageData.data[pixel] = 0;
+    territoryImageData.data[pixel + 1] = 0;
+    territoryImageData.data[pixel + 2] = 0;
+    territoryImageData.data[pixel + 3] = 0;
+    if (!owner) return;
+    const colors = colorsForOwner(owner);
+    const color = isBorderCell(position, owner) ? colors.borderPixel : colors.territoryPixel;
+    if (!color) return;
+    territoryImageData.data[pixel] = color[0];
+    territoryImageData.data[pixel + 1] = color[1];
+    territoryImageData.data[pixel + 2] = color[2];
+    territoryImageData.data[pixel + 3] = color[3];
   }
 
   function rebuildTerritoryLayer() {
-    if (!store.gameData?.owners) return;
-    renderer.setOwners(store.gameData.owners);
-    updateRendererPalette();
-    renderState.sceneDirty = true;
+    if (!gameData?.owners) return;
+    territoryCanvas.width = gameData.map.width;
+    territoryCanvas.height = gameData.map.height;
+    territoryImageData = territoryContext.createImageData(gameData.map.width, gameData.map.height);
+    for (let position = 0; position < gameData.owners.length; position += 1) {
+      paintTerritoryTile(position);
+    }
+    territoryContext.putImageData(territoryImageData, 0, 0);
+    composeSceneLayer();
   }
 
   function updateTerritoryLayer(changes) {
-    renderer.updateOwners(store.gameData.owners, changes);
-    updateRendererPalette();
+    const affected = new Set();
+    for (const change of changes || []) {
+      affected.add(change.position);
+      for (const neighbor of mapNeighbors(change.position)) affected.add(neighbor);
+    }
+    for (const position of affected) paintTerritoryTile(position);
+    if (territoryImageData) territoryContext.putImageData(territoryImageData, 0, 0);
+    composeSceneLayer();
+  }
+
+  function composeSceneLayer() {
+    if (!gameData || !terrainCanvas.width || !terrainCanvas.height) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    if (sceneCanvas.width !== width || sceneCanvas.height !== height) {
+      sceneCanvas.width = width;
+      sceneCanvas.height = height;
+    }
+    sceneContext.clearRect(0, 0, width, height);
+    sceneContext.drawImage(terrainCanvas, 0, 0, width, height);
+    if (territoryCanvas.width === width && territoryCanvas.height === height) {
+      sceneContext.drawImage(territoryCanvas, 0, 0, width, height);
+    }
     renderState.sceneDirty = true;
   }
 
   function mapNeighbors(position) {
-    return mapGeometry.mapNeighbors(position, store.gameData.map.width, store.gameData.map.height);
+    return mapGeometry.mapNeighbors(position, gameData.map.width, gameData.map.height);
   }
 
   function drawHover() {
-    if (store.hoverPosition === null || store.selectedPosition !== null || !spawnPhase || selectionLocked || !isValidCapital(store.hoverPosition)) return;
-    const width = store.gameData.map.width;
-    const shape = getCapitalCells(store.hoverPosition);
+    if (hoverPosition === null || selectedPosition !== null || !spawnPhase || selectionLocked || !isValidCapital(hoverPosition)) return;
+    const width = gameData.map.width;
+    const shape = getCapitalCells(hoverPosition);
     const cellSet = new Set(shape);
     dynamicContext.save();
     dynamicContext.strokeStyle = '#f4d35e';
@@ -401,16 +572,16 @@
   }
 
   function renderLeaderboard(force = false) {
-    if (!store.gameData?.players || !leaderboard) return;
+    if (!gameData?.players || !leaderboard) return;
     const now = performance.now();
     if (!force && now - leaderboardAt < LEADERBOARD_INTERVAL_MS) return;
     leaderboardAt = now;
-    const ranked = [...store.gameData.players].sort((a, b) =>
+    const ranked = [...gameData.players].sort((a, b) =>
       (b.territorySize || 0) - (a.territorySize || 0) || (b.troops || 0) - (a.troops || 0));
     let list = leaderboard.querySelector('.leaderboard-list');
     const scrollTop = list?.scrollTop || 0;
     const rankedEntries = ranked.map((player, index) => ({ player, index }));
-    const localIndex = ranked.findIndex((player) => player.playerId === store.localPlayerId);
+    const localIndex = ranked.findIndex((player) => player.playerId === localPlayerId);
     const initialEntries = rankedEntries.slice(0, 9);
     if (localIndex >= 9) initialEntries.push(rankedEntries[localIndex]);
     const initialIds = new Set(initialEntries.map(({ player }) => player.playerId));
@@ -428,16 +599,16 @@
       const ownerId = Number(player.playerId.replace('player-', ''));
       const color = playerColors.get(ownerId) || '#69c878';
       const row = document.createElement('div');
-      row.className = `leaderboard-row${player.playerId === store.localPlayerId ? ' is-local' : ''}${player.isBot ? ' is-bot' : ''}${player.isAlive === false ? ' is-eliminated' : ''}`;
+      row.className = `leaderboard-row${player.playerId === localPlayerId ? ' is-local' : ''}${player.isBot ? ' is-bot' : ''}${player.isAlive === false ? ' is-eliminated' : ''}`;
       row.dataset.playerId = player.playerId;
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
       row.title = `Focus ${player.playerName || player.playerId}`;
-      row.addEventListener('click', () => camera.focusPlayer(player.playerId, store.territoryVersion));
+      row.addEventListener('click', () => focusPlayer(player.playerId));
       row.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
-        camera.focusPlayer(player.playerId, store.territoryVersion);
+        focusPlayer(player.playerId);
       });
       row.innerHTML = `<span class="leaderboard-rank">${index + 1}</span><span class="leaderboard-swatch" style="background:${color}"></span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.troops)}<br>${player.territorySize || 0} tiles</span>`;
       row.querySelector('.leaderboard-name').textContent = `${player.isBot ? 'BOT ' : ''}${player.playerName || player.playerId}`;
@@ -449,7 +620,7 @@
 
   function rebuildPlayerMap() {
     playerMap.clear();
-    for (const player of store.gameData?.players || []) playerMap.set(player.playerId, player);
+    for (const player of gameData?.players || []) playerMap.set(player.playerId, player);
   }
 
   function updateLocalTroops(player) {
@@ -466,16 +637,19 @@
   }
 
   function drawScene() {
-    if (!store.gameData || !store.terrain) return;
+    if (!gameData || !terrain) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
     if (!renderState.sceneDirty) return;
-    renderer.draw();
+    context.clearRect(0, 0, width, height);
+    context.drawImage(sceneCanvas, 0, 0, width, height);
     renderState.sceneDirty = false;
   }
 
   function drawDynamic() {
-    if (!store.gameData || !store.terrain || !renderState.dynamicDirty) return;
-    const width = store.gameData.map.width;
-    const height = store.gameData.map.height;
+    if (!gameData || !terrain || !renderState.dynamicDirty) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
     dynamicContext.clearRect(0, 0, width, height);
     if (spawnPhase) drawSpawnCapitals();
     drawBoats();
@@ -484,19 +658,19 @@
   }
 
   function drawSpawnCapitals() {
-    const localPreviewActive = store.selectedPosition !== null;
-    for (const player of store.gameData.players || []) {
+    const localPreviewActive = selectedPosition !== null;
+    for (const player of gameData.players || []) {
       if (!Number.isInteger(player.spawnPosition)) continue;
-      if (player.playerId === store.localPlayerId && localPreviewActive) continue;
+      if (player.playerId === localPlayerId && localPreviewActive) continue;
       drawCapital(player.spawnPosition, player.capitalColor || playerColors.get(Number(player.playerId.replace('player-', ''))));
     }
-    if (localPreviewActive) drawCapital(store.selectedPosition, store.selectedColor);
+    if (localPreviewActive) drawCapital(selectedPosition, selectedColor);
   }
 
   // Troops at sea, drawn as a small marker in the owner's colour.
   function drawBoats() {
     if (!boats.length) return;
-    const width = store.gameData.map.width;
+    const width = gameData.map.width;
     dynamicContext.save();
     for (const boat of boats) {
       const x = boat.position % width;
@@ -511,8 +685,8 @@
   }
 
   function drawLabels() {
-    if (!store.gameData || !store.terrain) return;
-    TerriPlayerLabelRenderer.draw(store.gameData, zoom, store.territoryVersion);
+    if (!gameData || !terrain) return;
+    TerriPlayerLabelRenderer.draw(gameData, zoom, territoryVersion);
     renderState.labelsDirty = false;
     renderState.labelsCameraDirty = false;
     lastLabelDrawAt = performance.now();
@@ -523,7 +697,7 @@
     if (labelDrawFrame !== null) return;
     labelDrawFrame = requestAnimationFrame(() => {
       labelDrawFrame = null;
-      if (store.gameData && store.terrain && renderState.labelsDirty && renderState.labelsCameraDirty) drawLabels();
+      if (gameData && terrain && renderState.labelsDirty && renderState.labelsCameraDirty) drawLabels();
     });
   }
 
@@ -545,12 +719,12 @@
 
   function positionFromPointer(event) {
     const rectangle = canvas.getBoundingClientRect();
-    const localX = (event.clientX - rectangle.left) * (store.gameData.map.width / rectangle.width);
-    const localY = (event.clientY - rectangle.top) * (store.gameData.map.height / rectangle.height);
+    const localX = (event.clientX - rectangle.left) * (gameData.map.width / rectangle.width);
+    const localY = (event.clientY - rectangle.top) * (gameData.map.height / rectangle.height);
     const mapX = Math.floor(localX);
     const mapY = Math.floor(localY);
-    if (mapX < 0 || mapX >= store.gameData.map.width || mapY < 0 || mapY >= store.gameData.map.height) return null;
-    return mapY * store.gameData.map.width + mapX;
+    if (mapX < 0 || mapX >= gameData.map.width || mapY < 0 || mapY >= gameData.map.height) return null;
+    return mapY * gameData.map.width + mapX;
   }
 
   function updateSpawnTimer() {
@@ -563,7 +737,7 @@
     progressBar.classList.toggle('is-critical', remainingMs <= 5000);
     if (remainingMs <= 1000 && !selectionLocked) {
       selectionLocked = true;
-      spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: store.selectedPosition });
+      spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
     }
     if (remainingMs === 0) {
       clearInterval(timerHandle);
@@ -572,7 +746,7 @@
   }
 
   mapFrame.addEventListener('wheel', function (event) {
-    if (camera.isAnimating()) return;
+    if (eliminationAnimationFrame) return;
     if (event.shiftKey) {
       event.preventDefault();
       powerSlider.value = clamp(Number(powerSlider.value) + (event.deltaY > 0 ? -5 : 5), 1, 100);
@@ -592,11 +766,11 @@
     zoom = nextZoom;
     panX = event.clientX - localX * zoom - baseCenterX;
     panY = event.clientY - localY * zoom - baseCenterY;
-    camera.applyTransform();
+    applyMapTransform();
   }, { passive: false });
 
   mapFrame.addEventListener('pointerdown', function (event) {
-    if (camera.isAnimating()) return;
+    if (eliminationAnimationFrame) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (activePointers.size === 2) {
@@ -636,7 +810,7 @@
       zoom = clamp(pinchState.zoom * scale, 1, 200);
       panX = pinchState.panX + midpoint.x - pinchState.midpoint.x;
       panY = pinchState.panY + midpoint.y - pinchState.midpoint.y;
-      camera.applyTransform();
+      applyMapTransform();
       invalidateDynamic();
       drawDynamic();
       return;
@@ -645,14 +819,14 @@
     if (Math.abs(event.clientX - dragStart.x - panX) > 6 || Math.abs(event.clientY - dragStart.y - panY) > 6) dragMoved = true;
     panX = event.clientX - dragStart.x;
     panY = event.clientY - dragStart.y;
-    camera.applyTransform();
-    store.hoverPosition = positionFromPointer(event);
+    applyMapTransform();
+    hoverPosition = positionFromPointer(event);
     invalidateDynamic();
     drawDynamic();
   });
 
   mapFrame.addEventListener('pointerleave', function () {
-    store.hoverPosition = null;
+    hoverPosition = null;
     invalidateDynamic();
     drawDynamic();
   });
@@ -675,36 +849,36 @@
       if (position !== null) {
         if (!isValidCapital(position)) {
           spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
-          store.hoverPosition = null;
+          hoverPosition = null;
           invalidateDynamic();
           drawDynamic();
           return;
         }
-        store.selectedPosition = position;
-        store.selectedSpawnCells = getCapitalCells(position);
-        if (store.selectedSpawnCells.length !== 21 || !isValidCapital(position)) {
-          store.selectedSpawnCells = [];
+        selectedPosition = position;
+        selectedSpawnCells = getCapitalCells(position);
+        if (selectedSpawnCells.length !== 21 || !isValidCapital(position)) {
+          selectedSpawnCells = [];
           spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
-          store.hoverPosition = null;
+          hoverPosition = null;
           invalidateDynamic();
           drawDynamic();
           return;
         }
-        store.selectedColor = playerColors.get(Number(store.localPlayerId.replace('player-', ''))) || randomColor();
+        selectedColor = playerColors.get(Number(localPlayerId.replace('player-', ''))) || randomColor();
         spawnMessage.textContent = 'CAPITAL SELECTED // CLICK AGAIN TO REPLACE';
-        spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: store.selectedPosition });
+        spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
         invalidateDynamic();
         drawDynamic();
       }
     } else if (wasClick && activeGame) {
       const position = positionFromPointer(event);
-      const ownerId = Number(store.localPlayerId.replace('player-', ''));
-      if (position !== null && (store.terrain[position] & 0x80) !== 0 && store.gameData.owners[position] !== ownerId) {
+      const ownerId = Number(localPlayerId.replace('player-', ''));
+      if (position !== null && (terrain[position] & 0x80) !== 0 && gameData.owners[position] !== ownerId) {
         troopDisplay.classList.add('is-attacking');
-        mapActionHandler?.({ playerId: store.localPlayerId, position });
+        mapActionHandler?.({ playerId: localPlayerId, position });
       }
     }
-    store.hoverPosition = null;
+    hoverPosition = null;
     invalidateDynamic();
     drawDynamic();
   }
@@ -716,16 +890,16 @@
   }
 
   function playerHasWaterBorder(ownerId) {
-    if (localWaterBorderVersion === store.territoryVersion) return localPlayerHasWaterBorder;
+    if (localWaterBorderVersion === territoryVersion) return localPlayerHasWaterBorder;
     localPlayerHasWaterBorder = false;
-    for (let position = 0; position < store.gameData.owners.length; position += 1) {
-      if (store.gameData.owners[position] !== ownerId) continue;
-      if (mapNeighbors(position).some((neighbor) => (store.terrain[neighbor] & 0x80) === 0)) {
+    for (let position = 0; position < gameData.owners.length; position += 1) {
+      if (gameData.owners[position] !== ownerId) continue;
+      if (mapNeighbors(position).some((neighbor) => (terrain[neighbor] & 0x80) === 0)) {
         localPlayerHasWaterBorder = true;
         break;
       }
     }
-    localWaterBorderVersion = store.territoryVersion;
+    localWaterBorderVersion = territoryVersion;
     return localPlayerHasWaterBorder;
   }
 
@@ -736,10 +910,10 @@
     while (head < queue.length) {
       const current = queue[head++];
       const neighbors = mapNeighbors(current.position);
-      if (neighbors.some((neighbor) => (store.terrain[neighbor] & 0x80) === 0)) return true;
+      if (neighbors.some((neighbor) => (terrain[neighbor] & 0x80) === 0)) return true;
       if (current.distance >= maxDistance) continue;
       for (const neighbor of neighbors) {
-        if (visited.has(neighbor) || (store.terrain[neighbor] & 0x80) === 0) continue;
+        if (visited.has(neighbor) || (terrain[neighbor] & 0x80) === 0) continue;
         visited.add(neighbor);
         queue.push({ position: neighbor, distance: current.distance + 1 });
       }
@@ -753,7 +927,7 @@
     mapMenu.hidden = false;
     const attackButton = mapMenu.querySelector('[data-action="attack"]');
     const boatButton = mapMenu.querySelector('[data-action="boat"]');
-    const ownerId = Number(store.localPlayerId.replace('player-', ''));
+    const ownerId = Number(localPlayerId.replace('player-', ''));
     const canLaunchBoat = targetNearWater(position) && playerHasWaterBorder(ownerId);
     boatButton.hidden = !canLaunchBoat;
     // Clamp so the menu never opens off the edge of the screen.
@@ -771,11 +945,11 @@
 
   mapFrame.addEventListener('contextmenu', function (event) {
     event.preventDefault();
-    if (!activeGame || store.localPlayerId === null) return;
+    if (!activeGame || localPlayerId === null) return;
     const position = positionFromPointer(event);
-    const ownerId = Number(store.localPlayerId.replace('player-', ''));
+    const ownerId = Number(localPlayerId.replace('player-', ''));
     // Only offer the menu on land we do not already hold.
-    if (position === null || (store.terrain[position] & 0x80) === 0 || store.gameData.owners[position] === ownerId) {
+    if (position === null || (terrain[position] & 0x80) === 0 || gameData.owners[position] === ownerId) {
       hideMapMenu();
       return;
     }
@@ -789,10 +963,10 @@
     hideMapMenu();
     if (action === 'attack') {
       troopDisplay.classList.add('is-attacking');
-      mapActionHandler?.({ playerId: store.localPlayerId, position });
+      mapActionHandler?.({ playerId: localPlayerId, position });
     } else if (action === 'boat') {
       troopDisplay.classList.add('is-attacking');
-      boatActionHandler?.({ playerId: store.localPlayerId, position });
+      boatActionHandler?.({ playerId: localPlayerId, position });
     }
   });
 
@@ -809,7 +983,7 @@
   mapFrame.addEventListener('pointercancel', stopDragging);
   window.addEventListener('resize', function () {
     scheduleCanvasResize();
-    camera.applyTransform();
+    applyMapTransform();
   });
 
   powerSlider.addEventListener('input', function () {
@@ -818,7 +992,7 @@
   });
 
   cancelButton.addEventListener('click', function () {
-    window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(store.localPlayerId));
+    window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId));
     cancelButton.hidden = true;
   });
 
@@ -843,25 +1017,30 @@
     start(data) {
       stopRenderLoop();
       const sessionId = ++gameSessionId;
-      store.gameData = data;
-      store.territoryVersion = 0;
+      gameData = data;
+      territoryVersion = 0;
       displayTroops = 0;
       targetTroops = 0;
-      store.localPlayerId = data.playerId;
+      localPlayerId = data.playerId;
       activeGame = false;
-      store.gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
+      gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
       rebuildPlayerMap();
-      store.gameData.owners = new Int32Array(data.map.width * data.map.height);
-      renderer.setOwners(store.gameData.owners);
-      store.terrain = null;
-      store.expansionTimes = null;
+      gameData.owners = new Int32Array(data.map.width * data.map.height);
+      territoryCanvas.width = data.map.width;
+      territoryCanvas.height = data.map.height;
+      territoryImageData = territoryContext.createImageData(data.map.width, data.map.height);
+      territoryContext.putImageData(territoryImageData, 0, 0);
+      terrain = null;
+      expansionTimes = null;
+      context.clearRect(0, 0, data.map.width, data.map.height);
       dynamicContext.clearRect(0, 0, data.map.width, data.map.height);
+      sceneContext.clearRect(0, 0, sceneCanvas.width, sceneCanvas.height);
       renderState.sceneDirty = true;
       renderState.dynamicDirty = true;
       renderState.labelsDirty = true;
       renderState.labelsCameraDirty = true;
       boats.length = 0;
-      playerColorCache = colorUtils.createColorCache();
+      playerColorCache = new Map();
       localWaterBorderVersion = -1;
       lastLabelDrawAt = 0;
       loadTerrain(data.map, sessionId).catch((error) => {
@@ -874,21 +1053,23 @@
         console.warn('Expansion times unavailable; using server timing only:', error.message);
       });
       mapFrame.style.aspectRatio = `${data.map.width} / ${data.map.height}`;
-      store.selectedPosition = null;
-      store.selectedSpawnCells = [];
-      store.confirmedPosition = null;
-      store.localCapitalCells = new Set();
-      store.hoverPosition = null;
+      selectedPosition = null;
+      selectedSpawnCells = [];
+      confirmedPosition = null;
+      localCapitalCells = new Set();
+      selectedSpawnCells = [];
+      hoverPosition = null;
       playerColors.clear();
-      store.selectedColor = playerColors.get(Number(store.localPlayerId.replace('player-', ''))) || '#69c878';
+      selectedColor = playerColors.get(Number(localPlayerId.replace('player-', ''))) || '#69c878';
       spawnPhase = null;
       selectionLocked = false;
       localPlayerEliminated = false;
       localPlayerWon = false;
       winnerBanner.textContent = 'WINNER';
       winnerBanner.hidden = true;
-      camera.cancel();
-      camera.reset();
+      if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
+      eliminationAnimationFrame = null;
+      resetMapTransform();
       scheduleCanvasResize();
     },
     beginSpawnPhase(data) {
@@ -898,25 +1079,25 @@
       leaderboard.hidden = true;
       spawnPhase = data;
       if (data.players?.length) {
-        store.gameData.players = data.players;
+        gameData.players = data.players;
         rebuildPlayerMap();
         for (const player of data.players) {
           const ownerId = Number(player.playerId.replace('player-', ''));
           if (player.capitalColor) {
             playerColors.set(ownerId, player.capitalColor);
-            if (player.playerId === store.localPlayerId) store.selectedColor = player.capitalColor;
+            if (player.playerId === localPlayerId) selectedColor = player.capitalColor;
           }
         }
-        const localOwnerId = Number(store.localPlayerId.replace('player-', ''));
-        if (!store.selectedColor || store.selectedColor === '#8b9298') store.selectedColor = playerColors.get(localOwnerId) || '#69c878';
+        const localOwnerId = Number(localPlayerId.replace('player-', ''));
+        if (!selectedColor || selectedColor === '#8b9298') selectedColor = playerColors.get(localOwnerId) || '#69c878';
       }
       if (data.changes?.length) {
-        for (const change of data.changes) store.gameData.owners[change.position] = change.owner;
+        for (const change of data.changes) gameData.owners[change.position] = change.owner;
         updateTerritoryLayer(data.changes);
-        store.territoryVersion += 1;
+        territoryVersion += 1;
         renderState.labelsDirty = true;
       }
-      store.selectedSpawnCells = [];
+      selectedSpawnCells = [];
       selectionLocked = false;
       spawnHud.hidden = false;
       spawnMessage.textContent = 'CHOOSE A LAND POSITION FOR YOUR CAPITAL';
@@ -927,14 +1108,14 @@
       draw();
     },
     confirmSpawn(data) {
-      const confirmedPlayerId = data.playerId || store.localPlayerId;
-      const isLocalPlayer = confirmedPlayerId === store.localPlayerId;
+      const confirmedPlayerId = data.playerId || localPlayerId;
+      const isLocalPlayer = confirmedPlayerId === localPlayerId;
       if (isLocalPlayer) {
         spawnMessage.textContent = 'CAPITAL CONFIRMED // GAME STARTING';
-        if (data.color) store.selectedColor = data.color;
+        if (data.color) selectedColor = data.color;
       }
-      const previousCells = isLocalPlayer ? [...store.localCapitalCells] : (data.clearedCells || []);
-      previousCells.forEach((cell) => { store.gameData.owners[cell] = 0; });
+      const previousCells = isLocalPlayer ? [...localCapitalCells] : (data.clearedCells || []);
+      previousCells.forEach((cell) => { gameData.owners[cell] = 0; });
       const confirmedOwnerId = Number(confirmedPlayerId.replace('player-', ''));
       const player = playerMap.get(confirmedPlayerId);
       if (player) {
@@ -944,13 +1125,13 @@
       }
       if (data.color) {
         playerColors.set(confirmedOwnerId, data.color);
-        if (confirmedPlayerId === store.localPlayerId) store.selectedColor = data.color;
+        if (confirmedPlayerId === localPlayerId) selectedColor = data.color;
       }
-      if (isLocalPlayer) store.localCapitalCells = new Set(data.cells || []);
+      if (isLocalPlayer) localCapitalCells = new Set(data.cells || []);
       if (data.cells) {
-        if (isLocalPlayer) store.selectedSpawnCells = [...data.cells];
-        data.cells.forEach((cell) => { store.gameData.owners[cell] = confirmedOwnerId; });
-        store.territoryVersion += 1;
+        if (isLocalPlayer) selectedSpawnCells = [...data.cells];
+        data.cells.forEach((cell) => { gameData.owners[cell] = confirmedOwnerId; });
+        territoryVersion += 1;
         renderState.labelsDirty = true;
         updateTerritoryLayer([
           ...previousCells.map((position) => ({ position, owner: 0 })),
@@ -958,15 +1139,15 @@
         ]);
       }
       if (isLocalPlayer) {
-        store.confirmedPosition = data.position;
-        store.selectedPosition = null;
+        confirmedPosition = data.position;
+        selectedPosition = null;
       }
       invalidateDynamic();
       draw();
     },
     rejectSpawn(data) {
       selectionLocked = false;
-      store.selectedPosition = store.confirmedPosition;
+      selectedPosition = confirmedPosition;
       spawnMessage.textContent = `SPAWN REJECTED // ${data.reason}`;
       invalidateDynamic();
       drawDynamic();
@@ -985,17 +1166,16 @@
       leaderboard.hidden = false;
       spawnMessage.textContent = 'GAME ACTIVE // CAPITAL SECURED';
       if (data.players) {
-        store.gameData.players = data.players;
+        gameData.players = data.players;
         rebuildPlayerMap();
-        data.players.forEach(setPlayerColor);
-        updateRendererPalette();
-        for (const change of data.changes || []) store.gameData.owners[change.position] = change.owner;
+        data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
+        for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
         rebuildTerritoryLayer();
-        const player = data.players.find((item) => item.playerId === store.localPlayerId);
-        store.localCapitalCells = new Set();
-        if (player?.capitalColor) store.selectedColor = player.capitalColor;
+        const player = data.players.find((item) => item.playerId === localPlayerId);
+        localCapitalCells = new Set();
+        if (player?.capitalColor) selectedColor = player.capitalColor;
         updateLocalTroops(player);
-        store.selectedPosition = player?.spawnPosition ?? null;
+        selectedPosition = player?.spawnPosition ?? null;
       }
       resetInterpolation();
       renderLeaderboard(true);
@@ -1009,7 +1189,7 @@
       boatActionHandler = handler;
     },
     applyGameUpdate(data) {
-      const localPlayerBeforeAlive = (store.gameData?.players || []).find((player) => player.playerId === store.localPlayerId)?.isAlive !== false;
+      const localPlayerBeforeAlive = (gameData?.players || []).find((player) => player.playerId === localPlayerId)?.isAlive !== false;
       const now = performance.now();
       if (lastPacketAt) {
         const gap = now - lastPacketAt;
@@ -1021,7 +1201,7 @@
       if (hadBoats || boats.length) invalidateDynamic();
       queueChanges(data.changes);
       let leaderboardDirty = false;
-      if (!playerMap.size && store.gameData?.players?.length) rebuildPlayerMap();
+      if (!playerMap.size && gameData?.players?.length) rebuildPlayerMap();
       for (const player of data.players || []) {
         const current = playerMap.get(player.playerId);
         const previous = current ? {
@@ -1035,10 +1215,11 @@
         else {
           const nextPlayer = { ...player };
           playerMap.set(player.playerId, nextPlayer);
-          store.gameData.players.push(nextPlayer);
+          gameData.players.push(nextPlayer);
+          const ownerId = Number(player.playerId.replace('player-', ''));
+          if (player.capitalColor) playerColors.set(ownerId, player.capitalColor);
           leaderboardDirty = true;
         }
-        setPlayerColor(current || player);
         if (current && (
           previous.troops !== player.troops ||
           previous.territorySize !== player.territorySize ||
@@ -1048,10 +1229,10 @@
         )) {
           leaderboardDirty = true;
         }
-        if (player.playerId === store.localPlayerId) updateLocalTroops(current || player);
+        if (player.playerId === localPlayerId) updateLocalTroops(current || player);
       }
-      store.gameData.players = Array.from(playerMap.values());
-      const localPlayerAfter = playerMap.get(store.localPlayerId) || (store.gameData?.players || []).find((player) => player.playerId === store.localPlayerId);
+      gameData.players = Array.from(playerMap.values());
+      const localPlayerAfter = playerMap.get(localPlayerId) || (gameData?.players || []).find((player) => player.playerId === localPlayerId);
       if (!localPlayerEliminated && localPlayerBeforeAlive && localPlayerAfter?.isAlive === false) {
         localPlayerEliminated = true;
         winnerBanner.textContent = 'LOST';
@@ -1061,7 +1242,7 @@
         attackRatioPanel.hidden = true;
         cancelButton.hidden = true;
         troopDisplay.classList.remove('is-attacking');
-        camera.animateToCenter();
+        animateMapToCenter();
       }
       if (!localPlayerWon && localPlayerAfter?.isWinner === true) {
         localPlayerWon = true;
@@ -1071,10 +1252,9 @@
         attackRatioPanel.hidden = true;
         cancelButton.hidden = true;
         troopDisplay.classList.remove('is-attacking');
-        camera.animateToCenter();
+        animateMapToCenter();
       }
       updateRatioDisplay();
-      updateRendererPalette();
       if (leaderboardDirty) renderLeaderboard();
       renderState.labelsDirty = true;
       if (!renderLoopRunning) draw();

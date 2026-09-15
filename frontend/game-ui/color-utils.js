@@ -10,8 +10,8 @@
       const green = parseInt(hexMatch[1].slice(2, 4), 16);
       const blue = parseInt(hexMatch[1].slice(4, 6), 16);
       return {
-        territory: `rgb(${red},${green},${blue})`,
-        border: `rgb(${Math.floor(red * 0.7)},${Math.floor(green * 0.7)},${Math.floor(blue * 0.7)})`
+        territory: `rgba(${red},${green},${blue},0.6)`,
+        border: `rgba(${Math.floor(red * 0.7)},${Math.floor(green * 0.7)},${Math.floor(blue * 0.7)},0.9)`
       };
     }
 
@@ -20,8 +20,8 @@
     const hue = Number(match[1]);
     const saturation = Number(match[2]) * 0.5;
     return {
-      territory: `hsl(${hue}, ${saturation}%, 58%)`,
-      border: `hsla(${hue}, ${saturation}%, 37.5%, 1)`
+      territory: `hsla(${hue},${saturation}%,68%,0.6)`,
+      border: `hsla(${hue},${saturation}%,46%,0.9)`
     };
   }
 

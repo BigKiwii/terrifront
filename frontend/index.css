@@ -158,7 +158,7 @@ h1 span { color: var(--cyan); }
   .clock { font-size: 8px; }
 }
 
-.game-screen { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; background: #8a8a8a; }
+.game-screen { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; background: #354f63; }
 .game-screen[hidden] { display: none; }
 .lobby-screen { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; isolation: isolate; background: var(--night); }
 .lobby-screen[hidden] { display: none; }

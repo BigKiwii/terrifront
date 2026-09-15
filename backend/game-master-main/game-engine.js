@@ -130,8 +130,8 @@ class GameEngine {
   createPlayerColor(playerId) {
     if (this.players.get(playerId)?.isBot) return '#8b9298';
     const palette = [
-      '#69c878', '#e86b52', '#6ba8e8', '#d9b84c',
-      '#bb75d4', '#e889b1', '#55c5b5', '#e59b4f'
+      '#7ec48a', '#e8907a', '#85b4e0', '#d4bc6a',
+      '#c49ad4', '#e8a0bc', '#6ec4bc', '#e0aa72'
     ];
     const playerNumber = Number(playerId.replace('player-', '')) || 1;
     return palette[(playerNumber - 1) % palette.length];
