@@ -275,6 +275,23 @@ function encodeGameStarted(state) {
   return writer.finish();
 }
 
+function writeActiveAttacks(writer, attacks) {
+  writer.u16(attacks.length);
+  for (const attack of attacks) {
+    writer.u32(attack.id);
+    writer.u16(playerNumber(attack.playerId));
+    writer.u24(boundedU24(attack.troops));
+  }
+}
+
+function readActiveAttacks(reader) {
+  const attacks = [];
+  for (let index = 0, count = reader.u16(); index < count; index += 1) {
+    attacks.push({ id: reader.u32(), playerId: `player-${reader.u16()}`, troops: reader.u24() });
+  }
+  return attacks;
+}
+
 function encodeGameUpdate(state) {
   const boats = state.boats || [];
   const writer = new BinaryWriter(32 + state.changes.length * 6 + state.players.length * 17 + boats.length * 10);
@@ -285,6 +302,7 @@ function encodeGameUpdate(state) {
   if (state.players.length) flags |= 2;
   if (state.winnerId) flags |= 4;
   if (boats.length) flags |= 8;
+  flags |= 16;
   writer.u8(flags);
   if (state.changes.length) writeChanges(writer, state.changes);
   if (state.players.length) {
@@ -300,6 +318,7 @@ function encodeGameUpdate(state) {
       writer.u16(boat.troops || 0);
     }
   }
+  if (flags & 16) writeActiveAttacks(writer, state.activeAttacks || []);
   return writer.finish();
 }
 
@@ -362,7 +381,7 @@ function decodeServerMessage(value) {
     const changes = readChanges(reader);
     const winnerNumber = reader.u16();
     const winnerId = winnerNumber ? `player-${winnerNumber}` : null;
-    return { opcode, payload: { players, changes, winnerId } };
+    return { opcode, payload: { players, changes, winnerId, activeAttacks: [] } };
   }
   if (opcode === OP.GAME_UPDATE) {
     const tickCount = reader.u32();
@@ -377,7 +396,8 @@ function decodeServerMessage(value) {
         boats.push({ ownerId: reader.u16(), position: reader.u32(), troops: reader.u16() });
       }
     }
-    return { opcode, payload: { tickCount, changes, players, winnerId, boats } };
+    const activeAttacks = flags & 16 ? readActiveAttacks(reader) : [];
+    return { opcode, payload: { tickCount, changes, players, winnerId, boats, activeAttacks } };
   }
   throw new Error(`Unknown binary protocol opcode: ${opcode}`);
 }
@@ -390,7 +410,7 @@ function decodeClientMessage(value) {
   if (opcode === OP.JOIN_LOBBY) return { opcode, playerName: reader.string() };
   if (opcode === OP.SPAWN_POSITION) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32() };
   if (opcode === OP.EXPANSION_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
-  if (opcode === OP.CANCEL_EXPANSION) return { opcode, playerId: `player-${reader.u16()}` };
+  if (opcode === OP.CANCEL_EXPANSION) return { opcode, playerId: `player-${reader.u16()}`, attackId: reader.u32() };
   if (opcode === OP.BOAT_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
   if (opcode === OP.LEAVE_LOBBY) return { opcode, playerId: `player-${reader.u16()}` };
   throw new Error(`Unknown client opcode: ${opcode}`);
@@ -401,7 +421,7 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 if (typeof window !== 'undefined') {
-  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestLobby: () => new Uint8Array([OP.REQUEST_LOBBY]), encodeJoinLobby: (name) => encodeClientRequest(OP.JOIN_LOBBY, writer => writer.string(name)), encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u16(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => writer.u16(playerNumber(id))), encodeBoatRequest: (id, position, power) => encodeClientRequest(OP.BOAT_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeLeaveLobby: (id) => encodeClientRequest(OP.LEAVE_LOBBY, writer => writer.u16(playerNumber(id))) };
+  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestLobby: () => new Uint8Array([OP.REQUEST_LOBBY]), encodeJoinLobby: (name) => encodeClientRequest(OP.JOIN_LOBBY, writer => writer.string(name)), encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u16(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id, attackId = 0) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => { writer.u16(playerNumber(id)); writer.u32(attackId); }), encodeBoatRequest: (id, position, power) => encodeClientRequest(OP.BOAT_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeLeaveLobby: (id) => encodeClientRequest(OP.LEAVE_LOBBY, writer => writer.u16(playerNumber(id))) };
 }
 
 function encodeClientRequest(opcode, writePayload) {

@@ -156,7 +156,7 @@ class GameEngine {
       this.economyTickCount += 1;
       this.collectIncome();
     }
-    if (changes.length === 0 && !economyTick && this.boatManager.boats.size === 0) return null;
+    if (changes.length === 0 && !economyTick && this.boatManager.boats.size === 0 && this.expansionManager.attacks.size === 0) return null;
     return this.getTickState(changes);
   }
 
@@ -185,6 +185,10 @@ class GameEngine {
   cancelExpansion(playerId) {
     this.expansionManager.cancel(playerId);
     this.boatManager.cancel(playerId);
+  }
+
+  cancelAttack(playerId, attackId) {
+    return this.expansionManager.cancelAttack(playerId, attackId);
   }
 
   collectIncome() {
@@ -235,6 +239,7 @@ class GameEngine {
       owners: [...this.map.owners],
       tickCount: this.tickCount,
       winnerId: this.winnerId,
+      activeAttacks: this.expansionManager.getActiveAttacks(),
     };
   }
 
@@ -296,6 +301,7 @@ class GameEngine {
       changes,
       players,
       boats: this.boatManager.serialize(),
+      activeAttacks: this.expansionManager.getActiveAttacks(),
       winnerId: this.winnerId
     };
   }

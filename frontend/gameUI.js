@@ -21,11 +21,8 @@
   const spawnTime = document.querySelector('#spawn-time');
   const progressBar = document.querySelector('#spawn-progress-bar');
   const spawnMessage = document.querySelector('#spawn-message');
-  const troopDisplay = document.querySelector('#troop-display');
-  const troopCount = document.querySelector('#troop-count');
-  const territoryCount = document.querySelector('#territory-count');
+  const activeAttacksPanel = document.querySelector('#active-attacks');
   const leaderboard = document.querySelector('#leaderboard');
-  const cancelButton = document.querySelector('#cancel-button');
   const winnerBanner = document.querySelector('#winner-banner');
   const attackRatioPanel = document.querySelector('#attack-ratio-panel');
   const powerSlider = document.querySelector('#power-slider');
@@ -86,6 +83,7 @@
   let displayTroops = 0;
   let targetTroops = 0;
   let leaderboardAt = 0;
+  let activeAttacks = [];
 
   let territoryImageData = null;
   let localWaterBorderVersion = -1;
@@ -174,7 +172,7 @@
     const alpha = 1 - Math.exp(-deltaMs / TROOP_SMOOTHING_MS);
     displayTroops += (targetTroops - displayTroops) * alpha;
     if (Math.abs(targetTroops - displayTroops) < 0.5) displayTroops = targetTroops;
-    troopCount.textContent = formatTroops(displayTroops);
+    updateActiveAttacks(activeAttacks);
   }
 
   function renderFrame(timestamp) {
@@ -439,9 +437,9 @@
       const land = (terrain[position] & 0x80) !== 0;
       const magnitude = terrain[position] & 0x1f;
       if (land) {
-        pixels.data[pixel] = 185 + Math.min(25, magnitude * 2);
-        pixels.data[pixel + 1] = 178 + Math.min(22, magnitude * 2);
-        pixels.data[pixel + 2] = 148 + Math.min(18, magnitude);
+        pixels.data[pixel] = 226 + Math.min(20, magnitude * 2);
+        pixels.data[pixel + 1] = 209 + Math.min(18, magnitude * 2);
+        pixels.data[pixel + 2] = 161 + Math.min(16, magnitude);
       } else {
         pixels.data[pixel] = 79 + Math.min(9, Math.floor(magnitude * 1.2));
         pixels.data[pixel + 1] = 114 + Math.min(11, Math.floor(magnitude * 1.2));
@@ -576,30 +574,25 @@
     const now = performance.now();
     if (!force && now - leaderboardAt < LEADERBOARD_INTERVAL_MS) return;
     leaderboardAt = now;
-    const ranked = [...gameData.players].sort((a, b) =>
+    const ranked = [...gameData.players]
+      .filter((player) => player.isAlive !== false && (player.territorySize || 0) > 0)
+      .sort((a, b) =>
       (b.territorySize || 0) - (a.territorySize || 0) || (b.troops || 0) - (a.troops || 0));
-    let list = leaderboard.querySelector('.leaderboard-list');
-    const scrollTop = list?.scrollTop || 0;
     const rankedEntries = ranked.map((player, index) => ({ player, index }));
     const localIndex = ranked.findIndex((player) => player.playerId === localPlayerId);
-    const initialEntries = rankedEntries.slice(0, 9);
-    if (localIndex >= 9) initialEntries.push(rankedEntries[localIndex]);
-    const initialIds = new Set(initialEntries.map(({ player }) => player.playerId));
-    const displayEntries = [
-      ...initialEntries,
-      ...rankedEntries.filter(({ player }) => !initialIds.has(player.playerId))
-    ];
+    const displayEntries = rankedEntries.slice(0, 9);
+    if (localIndex >= 9) displayEntries.push(rankedEntries[localIndex]);
+    let list = leaderboard.querySelector('.leaderboard-list');
+    const scrollTop = list?.scrollTop || 0;
     if (!list) {
       leaderboard.innerHTML = '<div class="leaderboard-title"></div><div class="leaderboard-list"></div>';
       list = leaderboard.querySelector('.leaderboard-list');
     }
-    leaderboard.querySelector('.leaderboard-title').innerHTML = `LIVE RANKING <span>${ranked.length} PLAYERS</span>`;
+    leaderboard.querySelector('.leaderboard-title').textContent = 'LEADERBOARD';
     const rows = document.createDocumentFragment();
     displayEntries.forEach(({ player, index }) => {
-      const ownerId = Number(player.playerId.replace('player-', ''));
-      const color = playerColors.get(ownerId) || '#69c878';
       const row = document.createElement('div');
-      row.className = `leaderboard-row${player.playerId === localPlayerId ? ' is-local' : ''}${player.isBot ? ' is-bot' : ''}${player.isAlive === false ? ' is-eliminated' : ''}`;
+      row.className = `leaderboard-row${player.playerId === localPlayerId ? ' is-local' : ''}`;
       row.dataset.playerId = player.playerId;
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
@@ -610,8 +603,8 @@
         event.preventDefault();
         focusPlayer(player.playerId);
       });
-      row.innerHTML = `<span class="leaderboard-rank">${index + 1}</span><span class="leaderboard-swatch" style="background:${color}"></span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.troops)}<br>${player.territorySize || 0} tiles</span>`;
-      row.querySelector('.leaderboard-name').textContent = `${player.isBot ? 'BOT ' : ''}${player.playerName || player.playerId}`;
+      row.innerHTML = `<span class="leaderboard-rank">${index + 1}.</span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.territorySize || 0)}</span>`;
+      row.querySelector('.leaderboard-name').textContent = player.playerName || player.playerId;
       rows.appendChild(row);
     });
     list.replaceChildren(rows);
@@ -623,14 +616,34 @@
     for (const player of gameData?.players || []) playerMap.set(player.playerId, player);
   }
 
+  function updateActiveAttacks(attacks) {
+    activeAttacks = attacks || [];
+    if (!activeAttacksPanel) return;
+    activeAttacksPanel.replaceChildren();
+    activeAttacks
+      .filter((attack) => attack.playerId === localPlayerId && attack.troops > 0)
+      .forEach((attack) => {
+        const card = document.createElement('div');
+        card.className = 'active-attack-card';
+        const count = document.createElement('span');
+        count.className = 'active-attack-troops';
+        count.textContent = `${formatTroops(attack.troops)} troops`;
+        const cancel = document.createElement('button');
+        cancel.className = 'active-attack-cancel';
+        cancel.type = 'button';
+        cancel.setAttribute('aria-label', 'Cancel attack');
+        cancel.textContent = 'x';
+        cancel.addEventListener('click', () => {
+          window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId, attack.id));
+        });
+        card.append(count, cancel);
+        activeAttacksPanel.appendChild(card);
+      });
+  }
+
   function updateLocalTroops(player) {
     if (!player) return;
     targetTroops = player.troops || 0;
-    if (!renderLoopRunning) {
-      displayTroops = targetTroops;
-      troopCount.textContent = formatTroops(targetTroops);
-    }
-    territoryCount.textContent = player.territorySize || 0;
     const selectorTroopCount = document.getElementById('selector-troop-count');
     const selectorTerritory = document.getElementById('selector-territory');
     const selectorDensity = document.getElementById('selector-density');
@@ -644,8 +657,6 @@
         : '0.00';
       selectorDensity.textContent = density;
     }
-    troopDisplay.classList.toggle('is-attacking', Boolean(player.expansionActive));
-    cancelButton.hidden = !player.expansionActive;
     updateRatioDisplay();
   }
 
@@ -887,7 +898,6 @@
       const position = positionFromPointer(event);
       const ownerId = Number(localPlayerId.replace('player-', ''));
       if (position !== null && (terrain[position] & 0x80) !== 0 && gameData.owners[position] !== ownerId) {
-        troopDisplay.classList.add('is-attacking');
         mapActionHandler?.({ playerId: localPlayerId, position });
       }
     }
@@ -975,10 +985,8 @@
     const position = menuPosition;
     hideMapMenu();
     if (action === 'attack') {
-      troopDisplay.classList.add('is-attacking');
       mapActionHandler?.({ playerId: localPlayerId, position });
     } else if (action === 'boat') {
-      troopDisplay.classList.add('is-attacking');
       boatActionHandler?.({ playerId: localPlayerId, position });
     }
   });
@@ -1042,11 +1050,6 @@
     powerSlider.value = Math.min(100, Number(powerSlider.value) + 5);
     localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
     updateRatioDisplay();
-  });
-
-  cancelButton.addEventListener('click', function () {
-    window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId));
-    cancelButton.hidden = true;
   });
 
   window.addEventListener('keydown', function (event) {
@@ -1127,7 +1130,7 @@
     },
     beginSpawnPhase(data) {
       activeGame = false;
-      troopDisplay.hidden = true;
+      updateActiveAttacks([]);
       document.getElementById('selector-stats').hidden = true;
       attackRatioPanel.hidden = true;
       leaderboard.hidden = true;
@@ -1214,7 +1217,8 @@
       selectionLocked = true;
       clearInterval(timerHandle);
       spawnHud.hidden = true;
-      troopDisplay.hidden = false;
+      document.getElementById('selector-stats').hidden = false;
+      updateActiveAttacks(data.activeAttacks || []);
       attackRatioPanel.hidden = false;
       updateRatioDisplay();
       leaderboard.hidden = false;
@@ -1252,6 +1256,7 @@
       lastPacketAt = now;
       const hadBoats = boats.length > 0;
       boats.splice(0, boats.length, ...(data.boats || []));
+      updateActiveAttacks(data.activeAttacks || []);
       if (hadBoats || boats.length) invalidateDynamic();
       queueChanges(data.changes);
       let leaderboardDirty = false;
@@ -1294,8 +1299,7 @@
         activeGame = false;
         selectionLocked = true;
         attackRatioPanel.hidden = true;
-        cancelButton.hidden = true;
-        troopDisplay.classList.remove('is-attacking');
+        updateActiveAttacks([]);
         animateMapToCenter();
       }
       if (!localPlayerWon && localPlayerAfter?.isWinner === true) {
@@ -1304,8 +1308,7 @@
         activeGame = false;
         selectionLocked = true;
         attackRatioPanel.hidden = true;
-        cancelButton.hidden = true;
-        troopDisplay.classList.remove('is-attacking');
+        updateActiveAttacks([]);
         animateMapToCenter();
       }
       updateRatioDisplay();
@@ -1314,7 +1317,6 @@
       if (!renderLoopRunning) draw();
     },
     rejectExpansion(data) {
-      troopDisplay.classList.remove('is-attacking');
       spawnMessage.textContent = `EXPANSION REJECTED // ${data.reason}`;
     },
     stop() {
@@ -1322,6 +1324,7 @@
       stopRenderLoop();
       spawnPhase = null;
       activeGame = false;
+      updateActiveAttacks([]);
       winnerBanner.hidden = true;
     }
   };

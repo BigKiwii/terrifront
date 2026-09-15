@@ -31,6 +31,19 @@ class ExpansionManager {
     if (exactTroops < 1) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
 
     const targetOwnerId = targetPosition === null ? 0 : this.map.owners[targetPosition] || 0;
+    const existingAttack = [...this.attacks.values()].find((activeAttack) =>
+      activeAttack.playerId === playerId && (
+        (targetOwnerId !== 0 && activeAttack.targetOwnerId === targetOwnerId) ||
+        (targetOwnerId === 0 && activeAttack.targetPosition === targetPosition)
+      ));
+    if (existingAttack) {
+      player.troops = Math.max(0, player.troops - exactTroops);
+      existingAttack.troops += exactTroops;
+      existingAttack.borderTiles = new Set(this.territory.getBorderTiles(ownerId));
+      this.scheduleCandidates(existingAttack, this.getAttackCandidates(existingAttack));
+      return { accepted: true, playerId, troops: exactTroops, attackId: existingAttack.id, merged: true };
+    }
+
     const attack = {
       id: this.nextAttackId++,
       playerId,
@@ -201,6 +214,19 @@ class ExpansionManager {
     for (const attack of this.attacks.values()) {
       if (attack.playerId === playerId) this.finishAttack(attack);
     }
+  }
+
+  cancelAttack(playerId, attackId) {
+    const attack = this.attacks.get(Number(attackId));
+    if (!attack || attack.playerId !== playerId) return false;
+    this.finishAttack(attack);
+    return true;
+  }
+
+  getActiveAttacks(playerId) {
+    return [...this.attacks.values()]
+      .filter((attack) => !playerId || attack.playerId === playerId)
+      .map((attack) => ({ id: attack.id, playerId: attack.playerId, troops: attack.troops }));
   }
 
   isActive(playerId) {

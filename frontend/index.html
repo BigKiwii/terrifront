@@ -7,8 +7,8 @@
   <title>Terrifront</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=New+Rocker&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/png" href="../Assets/logo.png">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Jersey+15&family=New+Rocker&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="../Assets/logo_two.png">
   <link rel="stylesheet" href="index.css">
 </head>
 <body>
@@ -17,7 +17,12 @@
     <div class="logo-tint" aria-hidden="true"></div>
 
     <section class="hero" aria-labelledby="game-title">
-      <h1 id="game-title">TERRI<span>FRONT</span></h1>
+      <p class="home-kicker">TACTICAL MAP // LIVE FRONT</p>
+      <div class="title-lockup">
+        <img class="title-logo" src="../Assets/logo_two.png" alt="">
+        <h1 id="game-title">TERRI<span>FRONT</span></h1>
+        <img class="title-logo" src="../Assets/logo_two.png" alt="">
+      </div>
 
       <form class="launch-panel" id="launch-form">
         <div class="name-row">
@@ -53,7 +58,6 @@
 
   <main class="game-screen" id="game-screen" hidden>
     <button class="quit-button" id="quit-button" type="button">QUIT</button>
-    <button class="cancel-button" id="cancel-button" hidden type="button">CANCEL x</button>
     <div class="map-menu" id="map-menu" role="menu" hidden>
       <button type="button" class="map-menu-item" data-action="attack" role="menuitem" aria-label="Attack" title="Attack">
         <img src="../Assets/attack_logo.png" alt="">
@@ -63,10 +67,7 @@
       </button>
     </div>
     <div class="winner-banner" id="winner-banner" hidden role="status" aria-live="polite">WINNER</div>
-    <div class="troop-display" id="troop-display" hidden aria-live="polite">
-      <strong><span aria-hidden="true">⚔</span> <b id="troop-count">0</b> troops</strong>
-      <span><span aria-hidden="true">▦</span> <b id="territory-count">0</b> tiles</span>
-    </div>
+    <div class="active-attacks" id="active-attacks" aria-live="polite"></div>
     <div class="selector-stats" id="selector-stats" hidden>
       <div class="selector-troops">
         <span class="selector-troops-icon">⚔</span>

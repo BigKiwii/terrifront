@@ -202,7 +202,10 @@ server.on('connection', (socket) => {
     if (message.opcode === OP.CANCEL_EXPANSION) {
       if (!isAuthorizedMatchAction(socket, message.playerId)) return;
       const player = gameMaster.players.get(message.playerId);
-      if (player) player.engine.cancelExpansion(message.playerId);
+      if (player) {
+        if (message.attackId) player.engine.cancelAttack(message.playerId, message.attackId);
+        else player.engine.cancelExpansion(message.playerId);
+      }
       return;
     }
 
