@@ -30,17 +30,34 @@ class ExpansionManager {
     const exactTroops = Math.max(0, Math.min(player.troops, Number(troops) || 0));
     if (exactTroops < 1) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
 
+    // Resolve target identity purely by owner at click time.
+    // For player attacks (targetOwnerId != 0) we track the *owner*, not the
+    // clicked tile — any tile of that owner is the same target.
+    // For neutral expansion (targetOwnerId === 0) targetPosition is the
+    // anchor only used to distinguish separate neutral expansions.
     const targetOwnerId = targetPosition === null ? 0 : this.map.owners[targetPosition] || 0;
-    const existingAttack = [...this.attacks.values()].find((activeAttack) =>
-      activeAttack.playerId === playerId && (
-        (targetOwnerId !== 0 && activeAttack.targetOwnerId === targetOwnerId) ||
-        (targetOwnerId === 0 && activeAttack.targetPosition === targetPosition)
-      ));
+
+    // Merge key: for player attacks use targetOwnerId; for neutral use targetPosition.
+    const existingAttack = [...this.attacks.values()].find((activeAttack) => {
+      if (activeAttack.playerId !== playerId) return false;
+      if (targetOwnerId !== 0) return activeAttack.targetOwnerId === targetOwnerId;
+      return activeAttack.targetOwnerId === 0 && activeAttack.targetPosition === targetPosition;
+    });
+
     if (existingAttack) {
       player.troops = Math.max(0, player.troops - exactTroops);
       existingAttack.troops += exactTroops;
+      // Rebuild the full border so the merged attack radiates from everywhere,
+      // then clear and reschedule all pending tiles with updated troop count.
       existingAttack.borderTiles = new Set(this.territory.getBorderTiles(ownerId));
-      this.scheduleCandidates(existingAttack, this.getAttackCandidates(existingAttack));
+      const pendingTiles = [];
+      for (const slotTiles of existingAttack.tileQueue.values()) pendingTiles.push(...slotTiles);
+      existingAttack.tileQueue.clear();
+      existingAttack.scheduledTiles = 0;
+      existingAttack.queued.clear();
+      const mergedCandidates = new Set(pendingTiles);
+      for (const candidate of this.getAttackCandidates(existingAttack)) mergedCandidates.add(candidate);
+      this.scheduleCandidates(existingAttack, [...mergedCandidates]);
       return { accepted: true, playerId, troops: exactTroops, attackId: existingAttack.id, merged: true };
     }
 
@@ -54,12 +71,15 @@ class ExpansionManager {
       queueSlot: 0,
       scheduledTiles: 0,
       queued: new Set(),
-      targetPosition,
+      // For player attacks drop targetPosition — it was only ever used as a
+      // fallback merge key and caused the "different tile = new attack" bug.
+      targetPosition: targetOwnerId === 0 ? targetPosition : null,
       neutralMomentum: false,
+      frontTiles: frontTiles ? new Set(frontTiles) : null,
       borderTiles: new Set(frontTiles || this.territory.getBorderTiles(ownerId))
     };
     const candidates = this.getAttackCandidates(attack);
-    if (candidates.length === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
+    if (candidates.size === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
 
     player.troops = Math.max(0, player.troops - exactTroops);
     this.attacks.set(attack.id, attack);
@@ -69,6 +89,7 @@ class ExpansionManager {
 
   tick() {
     const changes = [];
+    const toFinish = [];
     for (const attack of this.attacks.values()) {
       const currentSlot = attack.tileQueue.get(attack.queueSlot);
       if (currentSlot) attack.tileQueue.delete(attack.queueSlot);
@@ -80,7 +101,11 @@ class ExpansionManager {
         if (!this.map.getNeighbors(position).some((neighbor) => this.map.owners[neighbor] === attack.ownerId)) continue;
 
         const result = this.territory.attackTile(position, attack.ownerId, attack.troops, this.players);
-        if (!result.success || attack.troops < result.attackerLoss) continue;
+        if (!result.success) continue;
+        if (attack.troops < result.attackerLoss) {
+          attack.troops = 0;
+          break;
+        }
         attack.troops -= result.attackerLoss;
         changes.push({ position, owner: attack.ownerId });
         for (const releasedPosition of result.releasedPositions || []) {
@@ -101,17 +126,20 @@ class ExpansionManager {
         this.scheduleCandidates(attack, frontier);
       }
 
+      this.scheduleCandidates(attack, this.getAttackCandidates(attack));
       attack.queueSlot = (attack.queueSlot + 1) % MAX_SCHEDULE_TICKS;
-      if (attack.troops <= 0 || attack.scheduledTiles <= 0) this.finishAttack(attack);
+      if (attack.troops <= 0 || (attack.scheduledTiles <= 0 && attack.tileQueue.size === 0)) toFinish.push(attack);
     }
+    for (const attack of toFinish) this.finishAttack(attack);
     return changes;
   }
 
   cancelEliminatedPlayer(ownerId) {
+    const toDelete = [];
     for (const [attackId, attack] of this.attacks) {
-      if (attack.ownerId !== ownerId) continue;
-      this.attacks.delete(attackId);
+      if (attack.ownerId === ownerId) toDelete.push(attackId);
     }
+    for (const attackId of toDelete) this.attacks.delete(attackId);
     const player = this.players.get(`player-${ownerId}`);
     if (player) player.troops = 0;
   }
@@ -142,7 +170,11 @@ class ExpansionManager {
   }
 
   isTargetTile(position, attack) {
+    // For neutral expansion: any unowned land tile.
     if (attack.targetOwnerId === 0) return this.map.isLand(position) && this.map.owners[position] === 0;
+    // For player attacks: any tile currently owned by that player, regardless
+    // of which tile was originally clicked. This ensures the full enemy
+    // territory is treated as the target, not just tiles near the click point.
     return this.map.owners[position] === attack.targetOwnerId;
   }
 
@@ -182,11 +214,11 @@ class ExpansionManager {
 
   getAttackCandidates(attack) {
     const candidates = new Set();
+    const frontier = attack.frontTiles
+      ? [...attack.frontTiles].filter((position) => this.territory.isOwnedBy(position, attack.ownerId))
+      : this.territory.getBorderTiles(attack.ownerId);
+    attack.borderTiles = new Set(frontier);
     for (const border of attack.borderTiles) {
-      if (!this.territory.isOwnedBy(border, attack.ownerId)) {
-        attack.borderTiles.delete(border);
-        continue;
-      }
       for (const neighbor of this.map.getNeighbors(border)) {
         if (this.isTargetTile(neighbor, attack)) candidates.add(neighbor);
       }
@@ -226,7 +258,12 @@ class ExpansionManager {
   getActiveAttacks(playerId) {
     return [...this.attacks.values()]
       .filter((attack) => !playerId || attack.playerId === playerId)
-      .map((attack) => ({ id: attack.id, playerId: attack.playerId, troops: attack.troops }));
+      .map((attack) => ({
+        id: attack.id,
+        playerId: attack.playerId,
+        targetOwnerId: attack.targetOwnerId,
+        troops: attack.troops
+      }));
   }
 
   isActive(playerId) {

@@ -84,6 +84,7 @@
   let targetTroops = 0;
   let leaderboardAt = 0;
   let activeAttacks = [];
+  const attackCardState = new Map();
 
   let territoryImageData = null;
   let localWaterBorderVersion = -1;
@@ -616,18 +617,59 @@
     for (const player of gameData?.players || []) playerMap.set(player.playerId, player);
   }
 
+  function attackMergeKey(attack) {
+    // Must mirror expansion-manager's merge logic exactly:
+    // player attacks → keyed by target owner (any tile of that owner = same attack)
+    // neutral expansion → keyed by attack id (each neutral expansion is independent)
+    const targetOwnerId = Number(attack.targetOwnerId) || 0;
+    return targetOwnerId ? `owner-${targetOwnerId}` : `id-${attack.id}`;
+  }
+
   function updateActiveAttacks(attacks) {
     activeAttacks = attacks || [];
     if (!activeAttacksPanel) return;
-    activeAttacksPanel.replaceChildren();
-    activeAttacks
+    const mergedMap = new Map();
+    for (const attack of activeAttacks) {
+      if (attack.playerId !== localPlayerId || attack.troops <= 0) continue;
+      const key = attackMergeKey(attack);
+      if (mergedMap.has(key)) mergedMap.get(key).troops += attack.troops;
+      else mergedMap.set(key, { ...attack });
+    }
+
+    const mergedAttacks = [...mergedMap.values()];
+    const existingCards = new Map(
+      [...activeAttacksPanel.querySelectorAll('.active-attack-card')]
+        .map((card) => [card.dataset.key, card])
+    );
+    const seenKeys = new Set();
+    mergedAttacks
       .filter((attack) => attack.playerId === localPlayerId && attack.troops > 0)
       .forEach((attack) => {
+        const key = attackMergeKey(attack);
+        seenKeys.add(key);
+        const previousTroops = attackCardState.get(key)?.troops;
+        if (existingCards.has(key)) {
+          const card = existingCards.get(key);
+          card.querySelector('.active-attack-troops').textContent = `${formatTroops(attack.troops)} troops`;
+          if (previousTroops !== undefined && attack.troops > previousTroops) {
+            const gain = card.querySelector('.active-attack-gain');
+            const gainState = attackCardState.get(key);
+            gain.textContent = `+ ${formatTroops(attack.troops - previousTroops)}`;
+            gain.classList.remove('is-fading');
+            clearTimeout(gainState.fadeTimer);
+            gainState.fadeTimer = setTimeout(() => gain.classList.add('is-fading'), 1800);
+          }
+          attackCardState.set(key, { ...attackCardState.get(key), troops: attack.troops });
+          return;
+        }
         const card = document.createElement('div');
         card.className = 'active-attack-card';
+        card.dataset.key = key;
         const count = document.createElement('span');
         count.className = 'active-attack-troops';
         count.textContent = `${formatTroops(attack.troops)} troops`;
+        const gain = document.createElement('span');
+        gain.className = 'active-attack-gain is-fading';
         const cancel = document.createElement('button');
         cancel.className = 'active-attack-cancel';
         cancel.type = 'button';
@@ -636,9 +678,18 @@
         cancel.addEventListener('click', () => {
           window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId, attack.id));
         });
-        card.append(count, cancel);
+        card.append(count, gain, cancel);
         activeAttacksPanel.appendChild(card);
+        attackCardState.set(key, { troops: attack.troops, fadeTimer: null });
       });
+    for (const [key, card] of existingCards) {
+      if (!seenKeys.has(key)) {
+        card.remove();
+        const state = attackCardState.get(key);
+        if (state) clearTimeout(state.fadeTimer);
+        attackCardState.delete(key);
+      }
+    }
   }
 
   function updateLocalTroops(player) {

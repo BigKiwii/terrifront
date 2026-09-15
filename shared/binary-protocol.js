@@ -280,6 +280,7 @@ function writeActiveAttacks(writer, attacks) {
   for (const attack of attacks) {
     writer.u32(attack.id);
     writer.u16(playerNumber(attack.playerId));
+    writer.u16(attack.targetOwnerId || 0);
     writer.u24(boundedU24(attack.troops));
   }
 }
@@ -287,7 +288,7 @@ function writeActiveAttacks(writer, attacks) {
 function readActiveAttacks(reader) {
   const attacks = [];
   for (let index = 0, count = reader.u16(); index < count; index += 1) {
-    attacks.push({ id: reader.u32(), playerId: `player-${reader.u16()}`, troops: reader.u24() });
+    attacks.push({ id: reader.u32(), playerId: `player-${reader.u16()}`, targetOwnerId: reader.u16(), troops: reader.u24() });
   }
   return attacks;
 }
