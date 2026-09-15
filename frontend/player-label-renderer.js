@@ -52,7 +52,7 @@
     const maxWidth = Math.max(1, squareWidth - 1);
     const fontSize = Math.max(1, Math.floor(Math.min(maxWidth / Math.max(1, text.length * 0.55), squareHeight * 0.28)));
     const centerX = Math.round(x + squareWidth / 2);
-    const textY = Math.round(y + squareHeight * (baselineBottom ? 0.38 : 0.62));
+    const textY = Math.round(y + squareHeight * (baselineBottom ? 0.34 : 0.66));
     context.font = `900 ${fontSize}px "Barlow Condensed", "Arial Narrow", sans-serif`;
     context.textAlign = 'center';
     context.textBaseline = baselineBottom ? 'bottom' : 'top';
