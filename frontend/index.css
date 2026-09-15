@@ -122,6 +122,7 @@ button, input { font: inherit; }
 
 .title-lockup { display: flex; align-items: center; justify-content: center; gap: 12px; }
 .title-logo { width: 48px; height: 48px; object-fit: contain; image-rendering: pixelated; filter: drop-shadow(3px 3px 0 rgba(48, 75, 92, 0.42)); }
+.beta-badge { position: absolute; top: -16px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100% - 24px); border: 2px solid #8f4f4f; padding: 5px 12px; color: #fff5d6; background: #c47a60; box-shadow: 3px 3px 0 rgba(48, 75, 92, 0.34); font-family: var(--data-font); font-size: 9px; font-weight: 700; letter-spacing: 0.08em; white-space: nowrap; }
 .flag-mark { display: grid; width: 24px; height: 30px; place-items: center; color: var(--paper); background: var(--green); border: 2px solid var(--paper); font-size: 16px; font-weight: 900; box-shadow: 2px 2px 0 #10151a; }
 
 h1 {
@@ -183,6 +184,9 @@ h1 span { color: var(--home-green); }
 .lobby-screen[hidden] { display: none; }
 .lobby-screen .map-wash { z-index: -3; background: url('../Assets/background.png') center / cover no-repeat; filter: blur(4px); transform: scale(1.025); animation: none; }
 .lobby-screen .map-glow, .lobby-screen .scanlines { display: none; }
+.lobby-back-button { position: absolute; z-index: 4; bottom: 16px; left: 16px; border: 2px solid #304b5c; padding: 8px 14px; color: #fff5d6; background: #457493; box-shadow: 3px 3px 0 rgba(48, 75, 92, 0.35); cursor: pointer; font-family: 'Jersey 15', sans-serif; font-size: 18px; letter-spacing: 0.08em; text-shadow: 1px 1px 0 #304b5c; }
+.lobby-back-button:hover, .lobby-back-button:focus-visible { background: #5a8fab; }
+.lobby-back-button:focus-visible { outline: 2px solid #82ad77; outline-offset: 3px; }
 .lobby-panel { width: min(430px, calc(100vw - 32px)); border: 3px solid rgba(255, 245, 214, 0.92); padding: 24px; color: var(--lobby-ink); background: rgba(255, 245, 214, 0.9); box-shadow: 7px 7px 0 rgba(48, 75, 92, 0.42); text-align: center; animation: rise-in 450ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .lobby-kicker { color: var(--lobby-green); font-family: var(--data-font); font-size: 9px; letter-spacing: 0.16em; }
 .lobby-panel h2 { margin: 9px 0 4px; color: var(--lobby-ink); font-family: 'Jersey 15', sans-serif; font-size: clamp(34px, 8vw, 52px); font-weight: 400; line-height: 1; text-shadow: 3px 3px 0 var(--lobby-sand); }

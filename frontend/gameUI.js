@@ -618,9 +618,6 @@
   }
 
   function attackMergeKey(attack) {
-    // Must mirror expansion-manager's merge logic exactly:
-    // player attacks → keyed by target owner (any tile of that owner = same attack)
-    // neutral expansion → keyed by attack id (each neutral expansion is independent)
     const targetOwnerId = Number(attack.targetOwnerId) || 0;
     return targetOwnerId ? `owner-${targetOwnerId}` : `id-${attack.id}`;
   }

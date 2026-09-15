@@ -14,6 +14,7 @@
   const lobbyRoster = document.querySelector('#lobby-roster');
   const lobbyJoinButton = document.querySelector('#lobby-join-button');
   const lobbyLeaveButton = document.querySelector('#lobby-leave-button');
+  const lobbyBackButton = document.querySelector('#lobby-back-button');
   const gameScreen = document.querySelector('#game-screen');
   const quitButton = document.querySelector('#quit-button');
   const powerSlider = document.querySelector('#power-slider');
@@ -116,7 +117,7 @@
     status.textContent = '';
   });
 
-  lobbyLeaveButton.addEventListener('click', function () {
+  function leaveLobby() {
     if (lobbyPlayerId) TerriCommunicator.send(PROTOCOL.encodeLeaveLobby(lobbyPlayerId));
     if (lobbyTimer) window.clearInterval(lobbyTimer);
     TerriCommunicator.disconnect();
@@ -124,7 +125,10 @@
     homeScreen.hidden = false;
     status.textContent = '';
     lobbyPlayerId = null;
-  });
+  }
+
+  lobbyLeaveButton.addEventListener('click', leaveLobby);
+  lobbyBackButton.addEventListener('click', leaveLobby);
 
   lobbyJoinButton.addEventListener('click', function () {
     const playerName = nameInput.value.trim();
