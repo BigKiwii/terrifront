@@ -14,7 +14,7 @@ class NeighbourAttackStrategy {
   execute(bot) {
     const target = this.selectTarget(bot);
     if (target === null) return false;
-    return this.expansionManager.start(bot.playerId, 100, target).accepted;
+    return this.expansionManager.start(bot.playerId, 600, target).accepted;
   }
 
   selectTarget(bot) {

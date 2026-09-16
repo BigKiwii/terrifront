@@ -1,5 +1,6 @@
 const MAX_POWER = 1000;
 const MAX_SCHEDULE_TICKS = 135;
+const DENSITY_SPEED_PRESSURE = 0.65;
 const SPEED_BOOST_THRESHOLDS = [
   { territorySize: 3000, boost: 0.20 },
   { territorySize: 10000, boost: 0.25 },
@@ -237,7 +238,7 @@ class ExpansionManager {
     if (attack.targetOwnerId === 0) return 1 / territoryBoost;
     if (!defender || !attacker) return 1 / territoryBoost;
     const attackerPower = Math.max(1, attackerTerritorySize) * Math.max(1, attack.troops);
-    const defenderPower = Math.max(1, this.territory.getTerritorySize(attack.targetOwnerId)) * Math.max(1, defender.troops);
+    const defenderPower = Math.max(1, this.territory.getTerritorySize(attack.targetOwnerId)) * Math.max(1, defender.troops) * DENSITY_SPEED_PRESSURE;
     return 2 / (0.325 + Math.log(1 + Math.min(50, attackerPower / defenderPower))) / territoryBoost;
   }
 
