@@ -5,8 +5,9 @@ const SPEED_BOOST_THRESHOLDS = [
   { territorySize: 10000, boost: 0.25 },
   { territorySize: 20000, boost: 0.30 }
 ];
-const tickChanges = [];
-const attacksToFinish = [];
+// NOTE: These were previously module-level (shared across all game instances),
+// which caused cross-game data corruption when multiple games ticked
+// concurrently. They are now instance properties on ExpansionManager.
 
 class ExpansionManager {
   constructor(map, territory, players) {
@@ -14,9 +15,14 @@ class ExpansionManager {
     this.territory = territory;
     this.players = players;
     this.attacks = new Map();
+    this.attacksByOwner = new Map();
     this.nextAttackId = 1;
     this.activeAttacksCache = [];
     this.activeAttacksDirty = true;
+    // Per-instance scratch arrays — avoids cross-game corruption that occurred
+    // when these were declared at module scope and shared by all game instances.
+    this._tickChanges = [];
+    this._attacksToFinish = [];
   }
 
   // `frontTiles` limits which of the player's own tiles the attack radiates
@@ -108,18 +114,23 @@ class ExpansionManager {
 
     player.troops = Math.max(0, player.troops - exactTroops);
     this.attacks.set(attack.id, attack);
+    this.indexAttack(attack);
     this.activeAttacksDirty = true;
     this.scheduleCandidates(attack, candidates);
     return { accepted: true, playerId, troops: exactTroops };
   }
 
   tick() {
+    const tickChanges = this._tickChanges;
+    const attacksToFinish = this._attacksToFinish;
     tickChanges.length = 0;
     attacksToFinish.length = 0;
     for (const attack of this.attacks.values()) {
       const currentSlot = attack.tileQueue.get(attack.queueSlot);
       if (currentSlot) attack.tileQueue.delete(attack.queueSlot);
-      attack.frontierDirty = false;
+      // Do NOT reset frontierDirty here — getAttackCandidates (called below)
+      // reads it to decide whether to rebuild the border copy. It is cleared
+      // after that call so it is fresh for the next tick.
       for (const position of currentSlot || []) {
         attack.scheduledTiles -= 1;
         attack.queued.delete(position);
@@ -135,9 +146,7 @@ class ExpansionManager {
         }
         attack.troops -= result.attackerLoss;
         attack.frontierDirty = true;
-        for (const otherAttack of this.attacks.values()) {
-          if (otherAttack.ownerId === attack.ownerId) otherAttack.frontierDirty = true;
-        }
+        this.markOwnerFrontiersDirty(attack.ownerId);
         tickChanges.push({ position, owner: attack.ownerId });
         for (const releasedPosition of result.releasedPositions || []) {
           tickChanges.push({ position: releasedPosition, owner: 0 });
@@ -160,6 +169,8 @@ class ExpansionManager {
       if (attack.frontierDirty || attack.scheduledTiles === 0) {
         this.scheduleCandidates(attack, this.getAttackCandidates(attack));
       }
+      // Clear after getAttackCandidates has had a chance to read the flag.
+      attack.frontierDirty = false;
       attack.queueSlot = (attack.queueSlot + 1) % MAX_SCHEDULE_TICKS;
       if (attack.troops <= 0 || (attack.scheduledTiles <= 0 && attack.tileQueue.size === 0)) attacksToFinish.push(attack);
     }
@@ -172,7 +183,11 @@ class ExpansionManager {
     for (const [attackId, attack] of this.attacks) {
       if (attack.ownerId === ownerId) toDelete.push(attackId);
     }
-    for (const attackId of toDelete) this.attacks.delete(attackId);
+    for (const attackId of toDelete) {
+      const attack = this.attacks.get(attackId);
+      if (attack) this.unindexAttack(attack);
+      this.attacks.delete(attackId);
+    }
     if (toDelete.length > 0) this.activeAttacksDirty = true;
     const player = this.players.get(`player-${ownerId}`);
     if (player) player.troops = 0;
@@ -184,6 +199,7 @@ class ExpansionManager {
       if (player && attack.troops > 0) player.troops += attack.troops;
     }
     this.attacks.clear();
+    this.attacksByOwner.clear();
     this.activeAttacksDirty = true;
   }
 
@@ -270,10 +286,14 @@ class ExpansionManager {
       // frontTiles is a constrained set (boat landing beachhead). Filter to
       // tiles still owned by the attacker, rebuild borderTiles from the result,
       // then collect neighbours that are valid targets.
-      attack.borderTiles.clear();
-      for (const position of attack.frontTiles) {
-        if (this.territory.isOwnedBy(position, attack.ownerId)) {
-          attack.borderTiles.add(position);
+      // Only rebuild when the frontier is actually dirty — avoids an O(N) copy
+      // of the full border set on every tick for every active attack.
+      if (attack.frontierDirty || attack.borderTiles.size === 0) {
+        attack.borderTiles.clear();
+        for (const position of attack.frontTiles) {
+          if (this.territory.isOwnedBy(position, attack.ownerId)) {
+            attack.borderTiles.add(position);
+          }
         }
       }
     } else {
@@ -281,9 +301,14 @@ class ExpansionManager {
       // getBorderSet returns the internal Set — do NOT mutate it. We rebuild
       // attack.borderTiles from it so refreshAttackBorder can still track the
       // per-attack frontier independently.
-      const liveBorder = this.territory.getBorderSet(attack.ownerId);
-      attack.borderTiles.clear();
-      for (const position of liveBorder) attack.borderTiles.add(position);
+      // Only copy when the frontier changed or the set is empty — this avoids
+      // copying tens of thousands of border tiles on every tick for every
+      // active attack when nothing has changed.
+      if (attack.frontierDirty || attack.borderTiles.size === 0) {
+        const liveBorder = this.territory.getBorderSet(attack.ownerId);
+        attack.borderTiles.clear();
+        for (const position of liveBorder) attack.borderTiles.add(position);
+      }
     }
     for (const border of attack.borderTiles) {
       for (const neighbor of this.map.getNeighbors(border)) {
@@ -306,7 +331,30 @@ class ExpansionManager {
   finishAttack(attack) {
     const player = this.players.get(attack.playerId);
     if (player && attack.troops > 0) player.troops += attack.troops;
-    if (this.attacks.delete(attack.id)) this.activeAttacksDirty = true;
+    if (this.attacks.delete(attack.id)) {
+      this.unindexAttack(attack);
+      this.activeAttacksDirty = true;
+    }
+  }
+
+  indexAttack(attack) {
+    let ownerAttacks = this.attacksByOwner.get(attack.ownerId);
+    if (!ownerAttacks) {
+      ownerAttacks = new Set();
+      this.attacksByOwner.set(attack.ownerId, ownerAttacks);
+    }
+    ownerAttacks.add(attack);
+  }
+
+  unindexAttack(attack) {
+    const ownerAttacks = this.attacksByOwner.get(attack.ownerId);
+    if (!ownerAttacks) return;
+    ownerAttacks.delete(attack);
+    if (ownerAttacks.size === 0) this.attacksByOwner.delete(attack.ownerId);
+  }
+
+  markOwnerFrontiersDirty(ownerId) {
+    for (const attack of this.attacksByOwner.get(ownerId) || []) attack.frontierDirty = true;
   }
 
   cancel(playerId) {
@@ -361,6 +409,13 @@ class ExpansionManager {
   hasActiveTarget(playerId, targetOwnerId) {
     for (const attack of this.attacks.values()) {
       if (attack.playerId === playerId && attack.targetOwnerId === targetOwnerId) return true;
+    }
+    return false;
+  }
+
+  hasActivePlayerAttack(playerId) {
+    for (const attack of this.attacks.values()) {
+      if (attack.playerId === playerId && attack.targetOwnerId !== 0) return true;
     }
     return false;
   }

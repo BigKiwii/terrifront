@@ -273,9 +273,10 @@ function isAuthorizedMatchAction(socket, playerId) {
 
 gameMaster.startTicker((update) => {
   const sockets = gameSockets.get(update.gameId) || new Set();
-  const payload = encodeGameUpdate(update);
   for (const socket of sockets) {
-    if (socket.readyState === WebSocket.OPEN) watchDog.send(socket, payload);
+    if (socket.readyState !== WebSocket.OPEN) continue;
+    const playerAttacks = update.activeAttacks?.filter((attack) => attack.playerId === socket.playerId) || [];
+    watchDog.send(socket, encodeGameUpdate({ ...update, activeAttacks: playerAttacks }));
   }
 }, (state) => {
   const sockets = gameSockets.get(state.gameId) || new Set();

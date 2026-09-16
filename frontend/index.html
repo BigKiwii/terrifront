@@ -96,6 +96,7 @@
       <p id="spawn-message">CHOOSE A LAND POSITION FOR YOUR CAPITAL</p>
     </div>
     <div class="map-frame">
+      <canvas id="webgl-canvas" aria-label="Terrifront GPU map"></canvas>
       <canvas id="game-canvas" aria-label="Terrifront game map"></canvas>
       <canvas id="dynamic-canvas" aria-hidden="true"></canvas>
     </div>
@@ -103,6 +104,7 @@
 
   <script src="../shared/binary-protocol.js"></script>
   <script src="communicator.js"></script>
+  <script src="game-ui/webgl-renderer.js"></script>
   <script src="player-label-renderer.js"></script>
   <script src="game-ui/map-geometry.js"></script>
   <script src="game-ui/color-utils.js"></script>

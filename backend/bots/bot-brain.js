@@ -6,6 +6,7 @@ const BotTickCache = require('./bot-tick-cache');
 class BotBrain {
   constructor(bot, dependencies, random = Math.random) {
     this.bot = bot;
+    this.expansionManager = dependencies.expansionManager;
     this.random = random;
     this.state = 'HUNGRY_FOR_NEUTRAL';
     this.neutralStrategy = new NeutralExpansionStrategy(
@@ -48,6 +49,7 @@ class BotBrain {
     }
 
     this.state = 'ATTACK_NEIGHBOUR';
+    if (this.expansionManager.hasActivePlayerAttack(this.bot.playerId)) return false;
     if (this.neighbourStrategy.execute(this.bot)) return true;
     return this.boatStrategy.execute(this.bot);
   }

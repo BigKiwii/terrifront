@@ -13,6 +13,7 @@
   const boats = store.boats;
 
   const canvas = document.querySelector('#game-canvas');
+  const webglCanvas = document.querySelector('#webgl-canvas');
   const dynamicCanvas = document.querySelector('#dynamic-canvas');
   const mapFrame = document.querySelector('.map-frame');
   const gameScreen = document.querySelector('#game-screen');
@@ -27,6 +28,15 @@
   const attackRatioPanel = document.querySelector('#attack-ratio-panel');
   const powerSlider = document.querySelector('#power-slider');
   const context = canvas.getContext('2d');
+  let webglRenderer = null;
+  try {
+    webglRenderer = modules.webglRenderer?.createMapRenderer(webglCanvas);
+  } catch (error) {
+    console.warn('WebGL map renderer unavailable; using 2D fallback:', error.message);
+    webglRenderer = null;
+    canvas.style.visibility = 'visible';
+    webglCanvas.style.display = 'none';
+  }
   const dynamicContext = dynamicCanvas.getContext('2d');
   const terrainCanvas = document.createElement('canvas');
   const terrainContext = terrainCanvas.getContext('2d');
@@ -65,12 +75,13 @@
   let confirmedPosition = null;
   let currentPower = 500;
   let territoryVersion = 0;
+  let labelTerritoryVersion = -1;
   let eliminationAnimationFrame = null;
   let localPlayerEliminated = false;
   let localPlayerWon = false;
   const TROOP_SMOOTHING_MS = 90;
   const LEADERBOARD_INTERVAL_MS = 250;
-  const LABEL_UPDATE_INTERVAL_MS = 250;
+  const LABEL_UPDATE_INTERVAL_MS = 500;
   const PLAYER_FOCUS_ZOOM = 4;
   let pendingChanges = [];
   let pendingHead = 0;
@@ -99,6 +110,19 @@
   let dynamicDrawFrame = null;
   let canvasResizeFrame = null;
   let gameSessionId = 0;
+
+  function updateWebglPalette() {
+    if (!webglRenderer) return;
+    webglRenderer.setPalette(playerColors, selectedColor);
+    renderState.sceneDirty = true;
+  }
+
+  function updateWebglOwners(changes = null) {
+    if (!webglRenderer || !gameData?.owners) return;
+    if (changes?.length) webglRenderer.updateOwners(gameData.owners, changes);
+    else webglRenderer.setOwners(gameData.owners);
+    renderState.sceneDirty = true;
+  }
 
   function clamp(value, minimum, maximum) {
     return Math.min(Math.max(value, minimum), maximum);
@@ -169,6 +193,7 @@
       pendingHead = 0;
     }
     if (applied.length) {
+      updateWebglOwners(applied);
       updateTerritoryLayer(applied);
       territoryVersion += 1;
       renderState.labelsDirty = true;
@@ -308,12 +333,19 @@
     mapScale = renderScale * Math.max(1, Math.floor(window.devicePixelRatio || 1));
     canvas.style.width = `${mapFrame.clientWidth}px`;
     canvas.style.height = `${mapFrame.clientHeight}px`;
+    webglCanvas.style.width = `${mapFrame.clientWidth}px`;
+    webglCanvas.style.height = `${mapFrame.clientHeight}px`;
     dynamicCanvas.style.width = `${canvas.offsetWidth}px`;
     dynamicCanvas.style.height = `${canvas.offsetHeight}px`;
     canvas.width = Math.ceil(width * mapScale);
     canvas.height = Math.ceil(height * mapScale);
     dynamicCanvas.width = Math.ceil(width * mapScale);
     dynamicCanvas.height = Math.ceil(height * mapScale);
+    if (webglRenderer) {
+      webglCanvas.width = canvas.width;
+      webglCanvas.height = canvas.height;
+      webglRenderer.resize();
+    }
     context.setTransform(mapScale, 0, 0, mapScale, 0, 0);
     dynamicContext.setTransform(mapScale, 0, 0, mapScale, 0, 0);
     context.imageSmoothingEnabled = false;
@@ -377,6 +409,7 @@
       const decodedTerrain = decodeBytes(window.TerriEmbeddedTerrain);
       if (sessionId !== gameSessionId) return;
       terrain = decodedTerrain;
+      if (webglRenderer) webglRenderer.setTerrain(terrain, mapData.width, mapData.height);
       buildTerrainLayer();
       draw();
       return;
@@ -389,6 +422,7 @@
     const loadedTerrain = new Uint8Array(await response.arrayBuffer());
     if (sessionId !== gameSessionId) return;
     terrain = loadedTerrain;
+    if (webglRenderer) webglRenderer.setTerrain(terrain, mapData.width, mapData.height);
     buildTerrainLayer();
     draw();
   }
@@ -435,6 +469,7 @@
 
   function buildTerrainLayer() {
     if (!gameData || !terrain) return;
+    if (webglRenderer) return;
     const width = gameData.map.width;
     const height = gameData.map.height;
     terrainCanvas.width = width;
@@ -510,6 +545,10 @@
 
   function rebuildTerritoryLayer() {
     if (!gameData?.owners) return;
+    if (webglRenderer) {
+      updateWebglOwners();
+      return;
+    }
     territoryCanvas.width = gameData.map.width;
     territoryCanvas.height = gameData.map.height;
     territoryImageData = territoryContext.createImageData(gameData.map.width, gameData.map.height);
@@ -521,6 +560,7 @@
   }
 
   function updateTerritoryLayer(changes) {
+    if (webglRenderer) return;
     if (!territoryImageData) return;
     const affected = new Set();
     for (const change of changes || []) {
@@ -586,6 +626,10 @@
     dynamicContext.restore();
   }
 
+  // Cached references for leaderboard — avoids querySelector on every render.
+  let _lbList = null;
+  let _lbTitle = null;
+
   function renderLeaderboard(force = false) {
     if (!gameData?.players || !leaderboard) return;
     const now = performance.now();
@@ -599,33 +643,82 @@
     const localIndex = ranked.findIndex((player) => player.playerId === localPlayerId);
     const displayEntries = rankedEntries.slice(0, 9);
     if (localIndex >= 9) displayEntries.push(rankedEntries[localIndex]);
-    let list = leaderboard.querySelector('.leaderboard-list');
-    const scrollTop = list?.scrollTop || 0;
-    if (!list) {
-      leaderboard.innerHTML = '<div class="leaderboard-title"></div><div class="leaderboard-list"></div>';
-      list = leaderboard.querySelector('.leaderboard-list');
+
+    // One-time scaffold — only built on the very first render.
+    if (!_lbList) {
+      leaderboard.innerHTML = '<div class="leaderboard-title">LEADERBOARD</div><div class="leaderboard-list"></div>';
+      _lbTitle = leaderboard.querySelector('.leaderboard-title');
+      _lbList = leaderboard.querySelector('.leaderboard-list');
     }
-    leaderboard.querySelector('.leaderboard-title').textContent = 'LEADERBOARD';
-    const rows = document.createDocumentFragment();
-    displayEntries.forEach(({ player, index }) => {
-      const row = document.createElement('div');
-      row.className = `leaderboard-row${player.playerId === localPlayerId ? ' is-local' : ''}`;
-      row.dataset.playerId = player.playerId;
-      row.tabIndex = 0;
-      row.setAttribute('role', 'button');
-      row.title = `Focus ${player.playerName || player.playerId}`;
-      row.addEventListener('click', () => focusPlayer(player.playerId));
-      row.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        focusPlayer(player.playerId);
-      });
-      row.innerHTML = `<span class="leaderboard-rank">${index + 1}.</span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.territorySize || 0)}</span>`;
-      row.querySelector('.leaderboard-name').textContent = player.playerName || player.playerId;
-      rows.appendChild(row);
-    });
-    list.replaceChildren(rows);
-    list.scrollTop = scrollTop;
+
+    // Diff existing rows against the new display list.
+    // Rows are keyed by playerId stored in dataset.playerId.
+    // Strategy: walk both the current DOM children and the new entries in
+    // parallel, updating text in-place where the key matches, inserting new
+    // rows where needed, and removing surplus rows at the end.
+    // This avoids destroying and recreating all rows + event listeners on
+    // every economy tick (previously every ~1 s with 250 players).
+    const existingRows = _lbList.children;
+    for (let i = 0; i < displayEntries.length; i += 1) {
+      const { player, index } = displayEntries[i];
+      const isLocal = player.playerId === localPlayerId;
+      const wantedClass = `leaderboard-row${isLocal ? ' is-local' : ''}`;
+
+      if (i < existingRows.length) {
+        // Reuse the existing row — update only what changed.
+        const row = existingRows[i];
+        if (row.dataset.playerId !== player.playerId) {
+          // Different player in this slot — re-key and rebind the click.
+          row.dataset.playerId = player.playerId;
+          row.title = `Focus ${player.playerName || player.playerId}`;
+          // Replace listeners by cloning the node without listeners, then
+          // re-attaching. Cheaper than removeEventListener when playerId swaps.
+          const fresh = row.cloneNode(true);
+          fresh.dataset.playerId = player.playerId;
+          fresh.title = `Focus ${player.playerName || player.playerId}`;
+          fresh.addEventListener('click', () => focusPlayer(player.playerId));
+          fresh.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            focusPlayer(player.playerId);
+          });
+          _lbList.replaceChild(fresh, row);
+          // existingRows is live — the replaced node is now fresh at index i.
+        }
+        const current = existingRows[i];
+        if (current.className !== wantedClass) current.className = wantedClass;
+        const rank = current.querySelector('.leaderboard-rank');
+        const name = current.querySelector('.leaderboard-name');
+        const values = current.querySelector('.leaderboard-values');
+        const wantedRank = `${index + 1}.`;
+        const wantedName = player.playerName || player.playerId;
+        const wantedValues = formatTroops(player.territorySize || 0);
+        if (rank && rank.textContent !== wantedRank) rank.textContent = wantedRank;
+        if (name && name.textContent !== wantedName) name.textContent = wantedName;
+        if (values && values.textContent !== wantedValues) values.textContent = wantedValues;
+      } else {
+        // New row needed — build and append.
+        const row = document.createElement('div');
+        row.className = wantedClass;
+        row.dataset.playerId = player.playerId;
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.title = `Focus ${player.playerName || player.playerId}`;
+        row.addEventListener('click', () => focusPlayer(player.playerId));
+        row.addEventListener('keydown', (event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          focusPlayer(player.playerId);
+        });
+        row.innerHTML = `<span class="leaderboard-rank">${index + 1}.</span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.territorySize || 0)}</span>`;
+        row.querySelector('.leaderboard-name').textContent = player.playerName || player.playerId;
+        _lbList.appendChild(row);
+      }
+    }
+    // Remove surplus rows (players that dropped off the display list).
+    while (_lbList.children.length > displayEntries.length) {
+      _lbList.removeChild(_lbList.lastChild);
+    }
   }
 
   function rebuildPlayerMap() {
@@ -726,16 +819,34 @@
 
   function drawScene() {
     if (!gameData || !terrain) return;
+    if (webglRenderer) {
+      if (renderState.sceneDirty) webglRenderer.draw();
+      renderState.sceneDirty = false;
+      return;
+    }
     const width = gameData.map.width;
     const height = gameData.map.height;
     if (territoryLayerDirty) {
       if (dirtyMinX <= dirtyMaxX && dirtyMinY <= dirtyMaxY) {
         const dirtyWidth = dirtyMaxX - dirtyMinX + 1;
         const dirtyHeight = dirtyMaxY - dirtyMinY + 1;
-        territoryContext.putImageData(territoryImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-        sceneContext.clearRect(dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-        sceneContext.drawImage(terrainCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-        sceneContext.drawImage(territoryCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+        // During heavy expansion phases (all bots attacking simultaneously)
+        // the dirty rect can expand to cover most of the map. At that point
+        // the partial-blit path has nearly the same cost as a full redraw but
+        // with extra arithmetic overhead. Fall back to a full putImageData
+        // when the dirty region exceeds 60 % of either map dimension.
+        const useFullBlit = dirtyWidth > width * 0.6 || dirtyHeight > height * 0.6;
+        if (useFullBlit) {
+          territoryContext.putImageData(territoryImageData, 0, 0);
+          sceneContext.clearRect(0, 0, width, height);
+          sceneContext.drawImage(terrainCanvas, 0, 0, width, height);
+          sceneContext.drawImage(territoryCanvas, 0, 0, width, height);
+        } else {
+          territoryContext.putImageData(territoryImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+          sceneContext.clearRect(dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+          sceneContext.drawImage(terrainCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+          sceneContext.drawImage(territoryCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+        }
       }
       dirtyMinX = Infinity;
       dirtyMinY = Infinity;
@@ -797,7 +908,8 @@
 
   function drawLabels() {
     if (!gameData || !terrain) return;
-    TerriPlayerLabelRenderer.draw(gameData, zoom, territoryVersion);
+    labelTerritoryVersion = territoryVersion;
+    TerriPlayerLabelRenderer.draw(gameData, zoom, labelTerritoryVersion);
     renderState.labelsDirty = false;
     renderState.labelsCameraDirty = false;
     lastLabelDrawAt = performance.now();
@@ -1169,6 +1281,9 @@
       gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
       rebuildPlayerMap();
       gameData.owners = new Int32Array(data.map.width * data.map.height);
+      labelTerritoryVersion = -1;
+      updateWebglOwners();
+      updateWebglPalette();
       territoryCanvas.width = data.map.width;
       territoryCanvas.height = data.map.height;
       territoryImageData = territoryContext.createImageData(data.map.width, data.map.height);
@@ -1235,8 +1350,10 @@
         const localOwnerId = Number(localPlayerId.replace('player-', ''));
         if (!selectedColor || selectedColor === '#8b9298') selectedColor = playerColors.get(localOwnerId) || '#69c878';
       }
+      updateWebglPalette();
       if (data.changes?.length) {
         for (const change of data.changes) gameData.owners[change.position] = change.owner;
+        updateWebglOwners(data.changes);
         updateTerritoryLayer(data.changes);
         territoryVersion += 1;
         renderState.labelsDirty = true;
@@ -1275,6 +1392,11 @@
       if (data.cells) {
         if (isLocalPlayer) selectedSpawnCells = [...data.cells];
         data.cells.forEach((cell) => { gameData.owners[cell] = confirmedOwnerId; });
+        updateWebglOwners([
+          ...previousCells.map((position) => ({ position, owner: 0 })),
+          ...data.cells.map((position) => ({ position, owner: confirmedOwnerId }))
+        ]);
+        updateWebglPalette();
         territoryVersion += 1;
         renderState.labelsDirty = true;
         updateTerritoryLayer([
@@ -1315,6 +1437,8 @@
         rebuildPlayerMap();
         data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
         for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
+        updateWebglOwners(data.changes);
+        updateWebglPalette();
         rebuildTerritoryLayer();
         const player = data.players.find((item) => item.playerId === localPlayerId);
         localCapitalCells = new Set();
@@ -1377,7 +1501,11 @@
         }
         if (player.playerId === localPlayerId) updateLocalTroops(current || player);
       }
-      gameData.players = Array.from(playerMap.values());
+      // NOTE: We do NOT rebuild gameData.players from playerMap here.
+      // playerMap values are the exact same object references that gameData.players
+      // already holds, so mutations via Object.assign above are already reflected.
+      // Rebuilding the array every packet (~50 ms) with 250 players was causing
+      // unnecessary allocations and GC pressure.
       const localPlayerAfter = playerMap.get(localPlayerId) || (gameData?.players || []).find((player) => player.playerId === localPlayerId);
       if (!localPlayerEliminated && localPlayerBeforeAlive && localPlayerAfter?.isAlive === false) {
         localPlayerEliminated = true;
@@ -1413,6 +1541,11 @@
       activeGame = false;
       updateActiveAttacks([]);
       winnerBanner.hidden = true;
+      // Reset cached leaderboard DOM references so the next session rebuilds
+      // them fresh rather than pointing at nodes from the previous game.
+      _lbList = null;
+      _lbTitle = null;
+      leaderboard.innerHTML = '';
     }
   };
 }());

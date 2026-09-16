@@ -239,7 +239,12 @@ h1 span { color: var(--home-green); }
 .map-frame { position: relative; width: min(70vw, 760px); aspect-ratio: 16 / 9; background: transparent; cursor: pointer; touch-action: none; transform-origin: center; will-change: transform; }
 .map-frame.is-dragging { cursor: grabbing; }
 .game-screen canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
-.map-frame #dynamic-canvas { position: absolute; top: 0; left: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; }
+.map-frame #webgl-canvas,
+.map-frame #game-canvas,
+.map-frame #dynamic-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+.map-frame #webgl-canvas { z-index: 0; }
+.map-frame #game-canvas { z-index: 0; visibility: hidden; }
+.map-frame #dynamic-canvas { z-index: 1; }
 .spawn-hud { position: absolute; z-index: 7; top: 0; right: 0; left: 0; width: 100%; height: 6px; color: #f4f3ea; text-align: center; text-shadow: 1px 1px 0 #111; }
 .spawn-hud[hidden] { display: none; }
 .spawn-hud-label { display: none; }

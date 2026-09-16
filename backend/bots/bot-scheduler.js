@@ -25,7 +25,7 @@ class BotScheduler {
 
   tick(tickCount) {
     if (this.botCount === 0) return;
-    const botsPerTick = Math.max(3, Math.ceil(this.botCount / 20));
+    const botsPerTick = Math.min(5, Math.max(3, Math.ceil(this.botCount / 20)));
     for (let index = 0; index < botsPerTick; index += 1) this.nextBot()?.tick(tickCount);
   }
 

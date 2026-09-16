@@ -13,6 +13,7 @@ const html = fs.readFileSync(path.join(frontend, 'index.html'), 'utf8');
 const binaryProtocol = fs.readFileSync(path.join(shared, 'binary-protocol.js'), 'utf8');
 const css = fs.readFileSync(path.join(frontend, 'index.css'), 'utf8');
 const communicator = fs.readFileSync(path.join(frontend, 'communicator.js'), 'utf8');
+const webglRenderer = fs.readFileSync(path.join(frontend, 'game-ui', 'webgl-renderer.js'), 'utf8');
 const playerLabelRenderer = fs.readFileSync(path.join(frontend, 'player-label-renderer.js'), 'utf8');
 const mapGeometry = fs.readFileSync(path.join(frontend, 'game-ui', 'map-geometry.js'), 'utf8');
 const colorUtils = fs.readFileSync(path.join(frontend, 'game-ui', 'color-utils.js'), 'utf8');
@@ -29,6 +30,7 @@ const output = html
   .replace('<link rel="stylesheet" href="index.css">', `<style>${css.replace("url('../map/europ-asia-map.webp')", `url('data:image/webp;base64,${map}')`)}</style>`)
   .replace('<script src="../shared/binary-protocol.js"></script>', `<script>${binaryProtocol}</script>`)
   .replace('<script src="communicator.js"></script>', `<script>${communicator}</script>`)
+  .replace('<script src="game-ui/webgl-renderer.js"></script>', `<script>${webglRenderer}</script>`)
   .replace('<script src="player-label-renderer.js"></script>', `<script>${playerLabelRenderer}</script>`)
   .replace('<script src="game-ui/map-geometry.js"></script>', `<script>${mapGeometry}</script>`)
   .replace('<script src="game-ui/color-utils.js"></script>', `<script>${colorUtils}</script>`)

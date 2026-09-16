@@ -33,17 +33,10 @@ void main() {
     clamp(int(vTexCoord.x * float(uMapSize.x)), 0, uMapSize.x - 1),
     clamp(int((1.0 - vTexCoord.y) * float(uMapSize.y)), 0, uMapSize.y - 1)
   );
-  uint terrain = uint(texelFetch(uTerrain, cell, 0).r * 255.0 + 0.5);
+  vec4 baseColor = texelFetch(uTerrain, cell, 0);
   uint owner = texelFetch(uOwners, cell, 0).r;
   if (owner == 0u) {
-    float magnitude = float(terrain & 31u);
-    if ((terrain & 128u) != 0u) {
-      outColor = vec4((126.0 + magnitude * 3.0) / 255.0,
-        (157.0 + min(30.0, magnitude)) / 255.0,
-        (108.0 + min(45.0, magnitude * 2.0)) / 255.0, 1.0);
-    } else {
-      outColor = vec4(25.0 / 255.0, 25.0 / 255.0, 95.0 / 255.0, 1.0);
-    }
+    outColor = baseColor;
     return;
   }
   vec4 paletteValue = paletteColor(owner);
@@ -54,7 +47,9 @@ void main() {
       texelFetch(uOwners, cell + ivec2(0, -1), 0).r != owner ||
       texelFetch(uOwners, cell + ivec2(0, 1), 0).r != owner;
   }
-  outColor = vec4(border ? paletteValue.rgb * 0.7 : paletteValue.rgb, paletteValue.a);
+  vec3 territoryColor = border ? paletteValue.rgb * 0.7 : paletteValue.rgb;
+  float territoryAlpha = border ? 0.9 : 0.6;
+  outColor = vec4(mix(baseColor.rgb, territoryColor, territoryAlpha), 1.0);
 }`;
 
   function compileShader(gl, type, source) {
@@ -147,8 +142,23 @@ void main() {
     function setTerrain(terrain, mapWidth, mapHeight) {
       width = mapWidth;
       height = mapHeight;
+      const pixels = new Uint8Array(width * height * 4);
+      for (let position = 0; position < terrain.length; position += 1) {
+        const magnitude = terrain[position] & 31;
+        const pixel = position * 4;
+        if ((terrain[position] & 128) !== 0) {
+          pixels[pixel] = 226 + Math.min(20, magnitude * 2);
+          pixels[pixel + 1] = 209 + Math.min(18, magnitude * 2);
+          pixels[pixel + 2] = 161 + Math.min(16, magnitude);
+        } else {
+          pixels[pixel] = 79 + Math.min(9, Math.floor(magnitude * 1.2));
+          pixels[pixel + 1] = 114 + Math.min(11, Math.floor(magnitude * 1.2));
+          pixels[pixel + 2] = 140 + Math.min(7, Math.floor(magnitude * 0.6));
+        }
+        pixels[pixel + 3] = 255;
+      }
       gl.bindTexture(gl.TEXTURE_2D, terrainTexture);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, width, height, 0, gl.RED, gl.UNSIGNED_BYTE, terrain);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       if (ownerData.length === width * height) uploadOwners();
       mapReady = ownerData.length === width * height;
       gl.useProgram(program);
