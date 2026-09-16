@@ -5,6 +5,7 @@
   "scripts": {
     "prestart": "npm run bake-map",
     "start": "node backend/websocket.js",
+    "prebuild": "npm run bake-map",
     "build": "node builder/build.js",
     "bake-map": "node scripts/bake-map.js"
   },
