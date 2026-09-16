@@ -1,5 +1,6 @@
 const { BotPlayer, BOT_NAMES } = require('./bot-player');
 const BotScheduler = require('./bot-scheduler');
+const BotTickCache = require('./bot-tick-cache');
 
 class BotManager {
   constructor(map, territory, expansionManager, players, boatManager = null) {
@@ -12,10 +13,12 @@ class BotManager {
     this.botListValid = false;
     this.bots = new Map();
     this.scheduler = new BotScheduler();
+    this.tickCache = new BotTickCache();
   }
 
   tick(tickCount) {
     this.refreshBotList();
+    this.tickCache.reset(tickCount);
     this.scheduler.tick(tickCount);
   }
 
@@ -33,7 +36,8 @@ class BotManager {
           territory: this.territory,
           expansionManager: this.expansionManager,
           boatManager: this.boatManager,
-          players: this.players
+          players: this.players,
+          tickCache: this.tickCache
         });
         this.bots.set(playerId, bot);
       }

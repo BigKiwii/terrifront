@@ -1,6 +1,7 @@
 const NeutralExpansionStrategy = require('./neutral-expansion-strategy');
 const NeighbourAttackStrategy = require('./neighbour-attack-strategy');
 const BoatAttackStrategy = require('./boat-attack-strategy');
+const BotTickCache = require('./bot-tick-cache');
 
 class BotBrain {
   constructor(bot, dependencies, random = Math.random) {
@@ -11,7 +12,8 @@ class BotBrain {
       dependencies.map,
       dependencies.territory,
       dependencies.expansionManager,
-      random
+      random,
+      dependencies.tickCache || new BotTickCache()
     );
     this.neighbourStrategy = new NeighbourAttackStrategy(
       dependencies.map,

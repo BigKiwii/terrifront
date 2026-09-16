@@ -1,16 +1,19 @@
+const BotTickCache = require('./bot-tick-cache');
+
 class NeutralExpansionStrategy {
-  constructor(map, territory, expansionManager, random) {
+  constructor(map, territory, expansionManager, random, tickCache = new BotTickCache()) {
     this.map = map;
     this.territory = territory;
     this.expansionManager = expansionManager;
     this.random = random;
-    this.targetCache = new Map();
-    this.activeAttackCache = null;
+    this.tickCache = tickCache;
   }
 
   findTarget(ownerId, tickCount) {
-    const cached = this.targetCache.get(ownerId);
-    if (cached && cached.tick === tickCount) return cached.target;
+    this.tickCache.reset(tickCount);
+    if (this.tickCache.neutralTargets.has(ownerId)) {
+      return this.tickCache.neutralTargets.get(ownerId);
+    }
 
     let target = null;
     let count = 0;
@@ -21,19 +24,20 @@ class NeutralExpansionStrategy {
         if (this.random() * count < 1) target = neighbor;
       }
     }
-    this.targetCache.set(ownerId, { tick: tickCount, target });
+    this.tickCache.neutralTargets.set(ownerId, target);
     return target;
   }
 
   hasActiveAttack(playerId, tickCount) {
-    if (!this.activeAttackCache || this.activeAttackCache.tick !== tickCount) {
+    this.tickCache.reset(tickCount);
+    if (!this.tickCache.activeAttackers) {
       const activePlayers = new Set();
       for (const attack of this.expansionManager.attacks.values()) {
         if (attack.targetOwnerId === 0) activePlayers.add(attack.playerId);
       }
-      this.activeAttackCache = { tick: tickCount, activePlayers };
+      this.tickCache.activeAttackers = activePlayers;
     }
-    return this.activeAttackCache.activePlayers.has(playerId);
+    return this.tickCache.activeAttackers.has(playerId);
   }
 
   execute(bot, tickCount, target) {
