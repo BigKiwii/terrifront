@@ -11,9 +11,9 @@ const {
 } = require('../../shared/game-rules');
 
 class GameEngine {
-  constructor(gameId) {
+  constructor(gameId, initialMap = null) {
     this.gameId = gameId;
-    this.map = null;
+    this.map = initialMap;
     this.players = new Map();
     this.phase = 'WAITING';
     this.spawnDeadline = null;

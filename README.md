@@ -7,11 +7,11 @@
   <strong>Node.js</strong> &nbsp;•&nbsp; <strong>WebSockets</strong> &nbsp;•&nbsp; <strong>Canvas rendering</strong> &nbsp;•&nbsp; <strong>Binary protocol</strong>
 </p>
 
-TerriFront is a browser-based multiplayer strategy game played on a large real-world map. Players choose a capital, expand across neighbouring territory, manage troop strength, and use boats to open distant fronts. A lightweight Node.js server runs the simulation while the browser renders the map and HUD in real time.
+TerriFront is a browser-based strategy game played on a large real-world map. Players choose a capital, expand across neighbouring territory, manage troop strength, and use boats to open distant fronts. The current public build runs the simulation locally in the browser so game mechanics can be tested without server capacity.
 
 ## Features
 
-- Live multiplayer matches over WebSockets
+- Offline singleplayer matches with browser-side bots
 - Territory capture with continuous simulation ticks
 - Spawn selection and capital placement
 - Troop economy tied to controlled territory
@@ -27,7 +27,7 @@ npm install
 npm start
 ```
 
-Open [http://localhost:8080](http://localhost:8080) in a browser and enter a player name.
+Open [http://localhost:8080](http://localhost:8080) in a browser and enter a player name. The homepage launches Singleplayer directly; no server connection is required after the static page is served.
 
 The server runs the map-baking step automatically before launch. To build the distributable HTML separately:
 
@@ -57,15 +57,19 @@ $env:PORT = 8081; npm start
 
 ## How To Play
 
-1. Enter a name and press **Play**.
+1. Enter a name and press **Singleplayer**.
 2. Choose a starting position during the spawn phase.
 3. Select enemy or neutral land on the map.
 4. Choose an expansion or boat action, then set the troop ratio.
 5. Grow your territory, protect your borders, and outlast the other players.
 
-## Multiplayer
+## Multiplayer (Disabled)
 
-TerriFront now includes an early true-multiplayer flow built around a rolling lobby:
+Multiplayer and WebSocket connection code is retained in the repository, but the public homepage does not start or use it while server capacity is unavailable. The primary client path is offline Singleplayer, including the same territory, attack, boat, economy, and bot mechanics. Multiplayer can be re-enabled later without removing the preserved server implementation.
+
+## Multiplayer Architecture (Retained)
+
+The retained multiplayer implementation uses an early true-multiplayer flow built around a rolling lobby:
 
 ```text
 Open lobby (30 seconds)
@@ -75,7 +79,7 @@ Open lobby (30 seconds)
   +-- players join --> start one shared match --> create the next lobby
 ```
 
-Players who press **Play** first see the current map-backed lobby. The player list, countdown, and lobby capacity update live over WebSockets. When the timer ends, every player in that lobby enters the same server-authoritative match and receives shared spawn, territory, boat, and player updates. A new lobby is opened immediately for the next group of players.
+When re-enabled, players who use the multiplayer launch action will see the current map-backed lobby. The player list, countdown, and lobby capacity update live over WebSockets. When the timer ends, every player in that lobby enters the same server-authoritative match and receives shared spawn, territory, boat, and player updates. A new lobby is opened immediately for the next group of players.
 
 The multiplayer implementation is split into focused areas:
 
@@ -120,7 +124,7 @@ TerriFront was heavily informed by studying **WarFront** and related territory, 
 
 ## Status
 
-TerriFront is an active experimental project. The core multiplayer loop, map rendering, expansion, bots, binary updates, and boat mechanics are in place; balance and deeper performance work are still evolving.
+TerriFront is an active experimental project. The offline singleplayer loop, map rendering, expansion, bots, and boat mechanics are active; the retained multiplayer loop is dormant while server capacity is unavailable.
 
 ## License
 

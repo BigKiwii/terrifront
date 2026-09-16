@@ -1,8 +1,4 @@
-const path = require('path');
-const fs = require('fs');
-
 const MAP_ID = 'europa-asia-01';
-const DEFAULT_MAP_PATH = path.resolve(__dirname, '../../map/map.bin');
 const TERRAIN_WATER = 0;
 const TERRAIN_LAND = 0x80;
 const OWNER_NEUTRAL = 0;
@@ -10,9 +6,12 @@ let mapPromise = null;
 
 function loadMap() {
   if (!mapPromise) {
+    const path = require('path');
+    const fs = require('fs');
+    const defaultMapPath = path.resolve(__dirname, '../../map/map.bin');
     const mapPath = process.env.TERRIFRONT_MAP_PATH
       ? path.resolve(process.env.TERRIFRONT_MAP_PATH)
-      : DEFAULT_MAP_PATH;
+      : defaultMapPath;
     mapPromise = Promise.resolve().then(() => {
       const manifestPath = path.join(path.dirname(mapPath), 'manifest.json');
       const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -102,4 +101,4 @@ function createMap(sourceTerrain, width, height, sourceExpansionTimes) {
   };
 }
 
-module.exports = { loadMap, cloneMap, TERRAIN_WATER, TERRAIN_LAND, OWNER_NEUTRAL };
+module.exports = { loadMap, cloneMap, createMap, TERRAIN_WATER, TERRAIN_LAND, OWNER_NEUTRAL };

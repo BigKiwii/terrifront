@@ -27,6 +27,27 @@
   let lobbyDuration = 30000;
   let lobbyTimer = null;
 
+  function showOfflineGame() {
+    const playerName = nameInput.value.trim();
+    if (!playerName) {
+      nameInput.focus();
+      status.textContent = 'ENTER A PLAYER NAME TO DEPLOY.';
+      return;
+    }
+    status.textContent = 'INITIALIZING OFFLINE FRONT...';
+    TerriOfflineGame.start(playerName)
+      .then(() => {
+        homeScreen.hidden = true;
+        lobbyScreen.hidden = true;
+        gameScreen.hidden = false;
+        status.textContent = '';
+      })
+      .catch((error) => {
+        console.error('Unable to start offline game:', error);
+        status.textContent = 'OFFLINE GAME INITIALIZATION FAILED.';
+      });
+  }
+
   function randomName() {
     return namePool[Math.floor(Math.random() * namePool.length)];
   }
@@ -96,20 +117,33 @@
   });
 
   TerriGameUI.onSpawnSubmit(function (payload) {
+    if (TerriOfflineGame.isRunning()) {
+      TerriOfflineGame.submitSpawn(payload);
+      return;
+    }
     TerriCommunicator.send(PROTOCOL.encodeSpawnPosition(payload.playerId, payload.position));
   });
 
   TerriGameUI.onMapAction(function (payload) {
     const power = Math.round(Number(powerSlider.value) * 10);
+    if (TerriOfflineGame.isRunning()) {
+      TerriOfflineGame.requestExpansion(payload, power);
+      return;
+    }
     TerriCommunicator.send(PROTOCOL.encodeExpansionRequest(payload.playerId, payload.position, power));
   });
 
   TerriGameUI.onBoatAction(function (payload) {
     const power = Math.round(Number(powerSlider.value) * 10);
+    if (TerriOfflineGame.isRunning()) {
+      TerriOfflineGame.requestBoat(payload, power);
+      return;
+    }
     TerriCommunicator.send(PROTOCOL.encodeBoatRequest(payload.playerId, payload.position, power));
   });
 
   quitButton.addEventListener('click', function () {
+    TerriOfflineGame.stop();
     TerriCommunicator.disconnect();
     TerriGameUI.stop();
     gameScreen.hidden = true;
@@ -140,24 +174,7 @@
 
   launchForm.addEventListener('submit', function (event) {
     event.preventDefault();
-    const playerName = nameInput.value.trim();
-
-    if (!playerName) {
-      nameInput.focus();
-      status.textContent = 'ENTER A PLAYER NAME TO DEPLOY.';
-      return;
-    }
-
-    status.textContent = 'OPENING MATCH LOBBY...';
-    TerriCommunicator.connect()
-      .then(() => {
-        if (!TerriCommunicator.send(PROTOCOL.encodeRequestLobby())) {
-          status.textContent = 'GAME SERVER CONNECTION FAILED.';
-        }
-      })
-      .catch(() => {
-        status.textContent = 'GAME SERVER UNAVAILABLE.';
-      });
+    showOfflineGame();
   });
 
   function renderLobby(lobby) {
