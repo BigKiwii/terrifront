@@ -34,14 +34,14 @@ class BotBrain {
       return false;
     }
 
-    if (this.neutralStrategy.hasActiveAttack(this.bot.playerId)) {
+    if (this.neutralStrategy.hasActiveAttack(this.bot.playerId, tickCount)) {
       this.state = 'HUNGRY_FOR_NEUTRAL';
-      return this.neutralStrategy.execute(this.bot);
+      return this.neutralStrategy.execute(this.bot, tickCount);
     }
-    const neutralTarget = this.neutralStrategy.findTarget(this.bot.ownerId);
+    const neutralTarget = this.neutralStrategy.findTarget(this.bot.ownerId, tickCount);
     if (neutralTarget !== null) {
       this.state = 'HUNGRY_FOR_NEUTRAL';
-      const result = this.neutralStrategy.execute(this.bot, neutralTarget);
+      const result = this.neutralStrategy.execute(this.bot, tickCount, neutralTarget);
       return result;
     }
 

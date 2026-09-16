@@ -15,6 +15,7 @@ const {
 } = require('../shared/binary-protocol');
 const GameMaster = require('./game-master-main/game-master');
 const LobbyManager = require('./multiplayer/lobby-manager');
+const WatchDog = require('./watchdog/watchdog');
 
 const port = Number(process.env.PORT || 8080);
 const root = path.resolve(__dirname, '..');
@@ -65,7 +66,8 @@ const staticServer = http.createServer((request, response) => {
   });
   response.end(payload);
 });
-const server = new WebSocket.Server({ server: staticServer });
+const server = new WebSocket.Server({ server: staticServer, maxPayload: 64 * 1024 });
+const watchDog = new WatchDog();
 const gameMaster = new GameMaster();
 const gameSockets = new Map();
 const lobbySockets = new Map();
@@ -83,7 +85,7 @@ function broadcastLobby(lobby) {
     const recipients = new Set(sockets);
     for (const socket of lobbyObservers) recipients.add(socket);
     for (const socket of recipients) {
-      if (socket.readyState === WebSocket.OPEN) socket.send(encodeLobbyState(payload, socket.playerId));
+      if (socket.readyState === WebSocket.OPEN) watchDog.send(socket, encodeLobbyState(payload, socket.playerId));
     }
   }, 15));
 }
@@ -100,8 +102,8 @@ async function startLobbyMatch(lobby) {
     const game = match.acceptedPlayers.get(lobbyPlayer.playerId);
     socket.lobbyId = null;
     socket.gameId = match.gameId;
-    socket.send(encodeGameAccepted(game));
-    socket.send(encodeSpawnPhaseStarted(game.playerId, match.spawnPhase, match.engine.getState()));
+    watchDog.send(socket, encodeGameAccepted(game));
+    watchDog.send(socket, encodeSpawnPhaseStarted(game.playerId, match.spawnPhase, match.engine.getState()));
   }
 
 }
@@ -111,7 +113,7 @@ const lobbyManager = new LobbyManager({ onStart: startLobbyMatch });
 function broadcastCurrentLobby(lobby) {
   const payload = lobby.snapshot();
   for (const socket of lobbyObservers) {
-    if (socket.readyState === WebSocket.OPEN) socket.send(encodeLobbyState(payload, ''));
+    if (socket.readyState === WebSocket.OPEN) watchDog.send(socket, encodeLobbyState(payload, ''));
   }
 }
 
@@ -159,15 +161,21 @@ async function handleLobbyRequest(socket, message) {
 
 server.on('connection', (socket) => {
   const clientAddress = socket._socket?.remoteAddress || 'unknown-client';
+  if (!watchDog.accept(socket, clientAddress)) return;
   console.log(`[${new Date().toISOString()}] CLIENT_CONNECTED ${clientAddress}`);
 
   socket.on('message', (rawMessage) => {
+    if (!watchDog.allowMessage(socket, rawMessage)) {
+      console.log(`[${new Date().toISOString()}] REQUEST_REJECTED reason=WATCHDOG_RATE_LIMIT address=${clientAddress}`);
+      socket.close(1008, 'Rate limit exceeded');
+      return;
+    }
     let message;
     try {
       message = decodeClientMessage(rawMessage);
     } catch {
       console.log(`[${new Date().toISOString()}] REQUEST_REJECTED reason=INVALID_BINARY_MESSAGE`);
-      socket.send(encodeRejected(OP.GAME_REJECTED, 'INVALID_JSON'));
+      watchDog.send(socket, encodeRejected(OP.GAME_REJECTED, 'INVALID_JSON'));
       return;
     }
 
@@ -175,7 +183,7 @@ server.on('connection', (socket) => {
       if (!isAuthorizedMatchAction(socket, message.playerId)) return;
       const result = gameMaster.requestExpansion(message.playerId, message.position, message.power);
       if (!result.accepted) {
-        socket.send(encodeRejected(OP.EXPANSION_REJECTED, result.reason));
+        watchDog.send(socket, encodeRejected(OP.EXPANSION_REJECTED, result.reason));
         return;
       }
       return;
@@ -183,7 +191,7 @@ server.on('connection', (socket) => {
 
     if (message.opcode === OP.REQUEST_LOBBY) {
       lobbyObservers.add(socket);
-      socket.send(encodeLobbyState(lobbyManager.getCurrentSnapshot(), ''));
+      watchDog.send(socket, encodeLobbyState(lobbyManager.getCurrentSnapshot(), ''));
       return;
     }
 
@@ -191,7 +199,7 @@ server.on('connection', (socket) => {
       if (!isAuthorizedMatchAction(socket, message.playerId)) return;
       const result = gameMaster.requestBoat(message.playerId, message.position, message.power);
       if (!result.accepted) {
-        socket.send(encodeRejected(OP.BOAT_REJECTED, result.reason));
+        watchDog.send(socket, encodeRejected(OP.BOAT_REJECTED, result.reason));
         return;
       }
       return;
@@ -212,12 +220,12 @@ server.on('connection', (socket) => {
       const result = gameMaster.submitSpawn(message.playerId, message.position);
       console.log(`[${new Date().toISOString()}] SPAWN_${result.accepted ? 'ACCEPTED' : 'REJECTED'} playerId=${message.playerId} position=${message.position} reason=${result.reason ?? 'none'}`);
       if (!result.accepted) {
-        socket.send(encodeRejected(OP.SPAWN_REJECTED, result.reason));
+        watchDog.send(socket, encodeRejected(OP.SPAWN_REJECTED, result.reason));
         return;
       }
       const payload = encodeSpawnConfirmed(result);
       for (const peer of gameSockets.get(socket.gameId) || []) {
-        if (peer.readyState === WebSocket.OPEN) peer.send(payload);
+        if (peer.readyState === WebSocket.OPEN) watchDog.send(peer, payload);
       }
       return;
     }
@@ -236,17 +244,18 @@ server.on('connection', (socket) => {
 
     if ((message.opcode !== OP.REQUEST_GAME && message.opcode !== OP.JOIN_LOBBY) || typeof message.playerName !== 'string') {
       console.log(`[${new Date().toISOString()}] REQUEST_REJECTED reason=INVALID_GAME_REQUEST`);
-      socket.send(encodeRejected(OP.GAME_REJECTED, 'INVALID_GAME_REQUEST'));
+      watchDog.send(socket, encodeRejected(OP.GAME_REJECTED, 'INVALID_GAME_REQUEST'));
       return;
     }
 
     handleLobbyRequest(socket, message).catch((error) => {
       console.error(`[${new Date().toISOString()}] REQUEST_FAILED reason=${error.message}`);
-      socket.send(encodeRejected(OP.GAME_REJECTED, 'MAP_LOAD_FAILED'));
+      watchDog.send(socket, encodeRejected(OP.GAME_REJECTED, 'MAP_LOAD_FAILED'));
     });
   });
 
   socket.on('close', () => {
+    watchDog.release(socket);
     lobbyObservers.delete(socket);
     if (socket.lobbyId) {
       const lobby = lobbyManager.getLobbyForPlayer(socket.playerId);
@@ -266,13 +275,13 @@ gameMaster.startTicker((update) => {
   const sockets = gameSockets.get(update.gameId) || new Set();
   const payload = encodeGameUpdate(update);
   for (const socket of sockets) {
-    if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+    if (socket.readyState === WebSocket.OPEN) watchDog.send(socket, payload);
   }
 }, (state) => {
   const sockets = gameSockets.get(state.gameId) || new Set();
   const payload = encodeGameStarted(state);
   for (const socket of sockets) {
-    if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+    if (socket.readyState === WebSocket.OPEN) watchDog.send(socket, payload);
   }
 });
 

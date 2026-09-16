@@ -82,6 +82,7 @@ The multiplayer implementation is split into focused areas:
 - `backend/multiplayer/` manages lobby state and the rolling lobby timer.
 - `backend/game-master-main/` creates shared match engines and fills remaining slots with bots.
 - `backend/websocket.js` manages lobby observers, match socket groups, broadcasts, and action ownership checks.
+- `backend/watchdog/` is the transport-protection boundary for WebSocket connections, with payload limits and inbound/outbound rate limiting.
 - `shared/binary-protocol.js` carries lobby, spawn, and game messages as compact binary packets.
 - `frontend/index.js` and `frontend/index.html` provide the lobby experience before handing control to the game UI.
 
@@ -93,7 +94,7 @@ This is the first multiplayer implementation and is not production infrastructur
 - It is designed for one server process; there is no database, shared session store, or multi-server scaling layer.
 - There is one rolling public lobby rather than private rooms, matchmaking filters, or invites.
 - The lobby timer is fixed at 30 seconds and matches target 250 total players, using bots to fill open slots.
-- Reconnection, persistent accounts, moderation, rate limiting, and durable match history are not implemented yet.
+- Reconnection, persistent accounts, moderation, and durable match history are not implemented yet. WatchDog currently provides process-local WebSocket rate limiting, not network-level DDoS protection.
 - A disconnected player is not yet guaranteed a full session-resume flow.
 - Multiplayer load testing beyond local two-client verification is still pending.
 
