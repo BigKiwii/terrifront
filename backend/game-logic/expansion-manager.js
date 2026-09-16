@@ -1,5 +1,7 @@
 const MAX_POWER = 1000;
 const MAX_SCHEDULE_TICKS = 135;
+const tickChanges = [];
+const attacksToFinish = [];
 
 class ExpansionManager {
   constructor(map, territory, players) {
@@ -8,6 +10,8 @@ class ExpansionManager {
     this.players = players;
     this.attacks = new Map();
     this.nextAttackId = 1;
+    this.activeAttacksCache = [];
+    this.activeAttacksDirty = true;
   }
 
   // `frontTiles` limits which of the player's own tiles the attack radiates
@@ -83,13 +87,14 @@ class ExpansionManager {
 
     player.troops = Math.max(0, player.troops - exactTroops);
     this.attacks.set(attack.id, attack);
+    this.activeAttacksDirty = true;
     this.scheduleCandidates(attack, candidates);
     return { accepted: true, playerId, troops: exactTroops };
   }
 
   tick() {
-    const changes = [];
-    const toFinish = [];
+    tickChanges.length = 0;
+    attacksToFinish.length = 0;
     for (const attack of this.attacks.values()) {
       const currentSlot = attack.tileQueue.get(attack.queueSlot);
       if (currentSlot) attack.tileQueue.delete(attack.queueSlot);
@@ -107,9 +112,9 @@ class ExpansionManager {
           break;
         }
         attack.troops -= result.attackerLoss;
-        changes.push({ position, owner: attack.ownerId });
+        tickChanges.push({ position, owner: attack.ownerId });
         for (const releasedPosition of result.releasedPositions || []) {
-          changes.push({ position: releasedPosition, owner: 0 });
+          tickChanges.push({ position: releasedPosition, owner: 0 });
         }
         this.refreshAttackBorder(attack, position);
         if (result.eliminatedOwnerId) {
@@ -128,10 +133,10 @@ class ExpansionManager {
 
       this.scheduleCandidates(attack, this.getAttackCandidates(attack));
       attack.queueSlot = (attack.queueSlot + 1) % MAX_SCHEDULE_TICKS;
-      if (attack.troops <= 0 || (attack.scheduledTiles <= 0 && attack.tileQueue.size === 0)) toFinish.push(attack);
+      if (attack.troops <= 0 || (attack.scheduledTiles <= 0 && attack.tileQueue.size === 0)) attacksToFinish.push(attack);
     }
-    for (const attack of toFinish) this.finishAttack(attack);
-    return changes;
+    for (const attack of attacksToFinish) this.finishAttack(attack);
+    return tickChanges;
   }
 
   cancelEliminatedPlayer(ownerId) {
@@ -140,6 +145,7 @@ class ExpansionManager {
       if (attack.ownerId === ownerId) toDelete.push(attackId);
     }
     for (const attackId of toDelete) this.attacks.delete(attackId);
+    if (toDelete.length > 0) this.activeAttacksDirty = true;
     const player = this.players.get(`player-${ownerId}`);
     if (player) player.troops = 0;
   }
@@ -150,6 +156,7 @@ class ExpansionManager {
       if (player && attack.troops > 0) player.troops += attack.troops;
     }
     this.attacks.clear();
+    this.activeAttacksDirty = true;
   }
 
   requeueNeutralFrontier(attack, releasedPositions) {
@@ -254,7 +261,7 @@ class ExpansionManager {
   finishAttack(attack) {
     const player = this.players.get(attack.playerId);
     if (player && attack.troops > 0) player.troops += attack.troops;
-    this.attacks.delete(attack.id);
+    if (this.attacks.delete(attack.id)) this.activeAttacksDirty = true;
   }
 
   cancel(playerId) {
@@ -271,14 +278,24 @@ class ExpansionManager {
   }
 
   getActiveAttacks(playerId) {
-    return [...this.attacks.values()]
-      .filter((attack) => !playerId || attack.playerId === playerId)
-      .map((attack) => ({
+    if (this.activeAttacksDirty) {
+      this.activeAttacksCache = [...this.attacks.values()].map((attack) => ({
         id: attack.id,
         playerId: attack.playerId,
         targetOwnerId: attack.targetOwnerId,
         troops: attack.troops
       }));
+      this.activeAttacksDirty = false;
+    } else {
+      let index = 0;
+      for (const attack of this.attacks.values()) {
+        const cachedAttack = this.activeAttacksCache[index++];
+        cachedAttack.targetOwnerId = attack.targetOwnerId;
+        cachedAttack.troops = attack.troops;
+      }
+    }
+    if (!playerId) return this.activeAttacksCache;
+    return this.activeAttacksCache.filter((attack) => attack.playerId === playerId);
   }
 
   isActive(playerId) {

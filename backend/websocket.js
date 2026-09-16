@@ -70,16 +70,22 @@ const gameMaster = new GameMaster();
 const gameSockets = new Map();
 const lobbySockets = new Map();
 const lobbyObservers = new Set();
+const lobbyBroadcastTimers = new Map();
 
 function broadcastLobby(lobby) {
-  const sockets = lobbySockets.get(lobby.lobbyId);
-  if (!sockets) return;
-  const payload = lobby.snapshot();
-  const recipients = new Set(sockets);
-  for (const socket of lobbyObservers) recipients.add(socket);
-  for (const socket of recipients) {
-    if (socket.readyState === WebSocket.OPEN) socket.send(encodeLobbyState(payload, socket.playerId));
-  }
+  const previousTimer = lobbyBroadcastTimers.get(lobby.lobbyId);
+  if (previousTimer) clearTimeout(previousTimer);
+  lobbyBroadcastTimers.set(lobby.lobbyId, setTimeout(() => {
+    lobbyBroadcastTimers.delete(lobby.lobbyId);
+    const sockets = lobbySockets.get(lobby.lobbyId);
+    if (!sockets) return;
+    const payload = lobby.snapshot();
+    const recipients = new Set(sockets);
+    for (const socket of lobbyObservers) recipients.add(socket);
+    for (const socket of recipients) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(encodeLobbyState(payload, socket.playerId));
+    }
+  }, 15));
 }
 
 async function startLobbyMatch(lobby) {

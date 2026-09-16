@@ -15,12 +15,14 @@ class BotManager {
     this.expansionManager = expansionManager;
     this.players = players;
     this.botList = [];
+    this.botListValid = false;
     this.botProfiles = new Map();
   }
 
   tick(tickCount) {
-    if (this.botList.length === 0) {
+    if (!this.botListValid) {
       this.botList = [...this.players.keys()].filter((playerId) => this.players.get(playerId)?.isBot);
+      this.botListValid = true;
     }
     const total = this.botList.length;
     if (total === 0) return;
@@ -29,6 +31,10 @@ class BotManager {
       const player = this.players.get(playerId);
       if (player) this.tickBot(playerId, player, tickCount);
     }
+  }
+
+  invalidatePlayerCache() {
+    this.botListValid = false;
   }
 
   tickBot(playerId, player, tickCount) {

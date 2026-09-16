@@ -33,6 +33,7 @@ class GameEngine {
     if (!this.territoryManager) this.territoryManager = new TerritoryManager(this.map);
     if (!this.expansionManager) this.expansionManager = new ExpansionManager(this.map, this.territoryManager, this.players);
     if (!this.boatManager) this.boatManager = new BoatManager(this.map, this.territoryManager, this.players, this.expansionManager);
+    this.botManager?.invalidatePlayerCache();
     this.players.set(playerId, {
       playerId,
       name: playerName,
