@@ -92,6 +92,7 @@
   let localPlayerHasWaterBorder = false;
   let lastLabelDrawAt = 0;
   let labelDrawFrame = null;
+  let dynamicDrawFrame = null;
   let canvasResizeFrame = null;
   let gameSessionId = 0;
 
@@ -206,6 +207,8 @@
     eliminationAnimationFrame = null;
     if (labelDrawFrame !== null) cancelAnimationFrame(labelDrawFrame);
     labelDrawFrame = null;
+    if (dynamicDrawFrame !== null) cancelAnimationFrame(dynamicDrawFrame);
+    dynamicDrawFrame = null;
     if (canvasResizeFrame !== null) cancelAnimationFrame(canvasResizeFrame);
     canvasResizeFrame = null;
   }
@@ -735,6 +738,14 @@
     renderState.dynamicDirty = false;
   }
 
+  function scheduleDynamicDraw() {
+    if (dynamicDrawFrame !== null) return;
+    dynamicDrawFrame = requestAnimationFrame(() => {
+      dynamicDrawFrame = null;
+      drawDynamic();
+    });
+  }
+
   function drawSpawnCapitals() {
     const localPreviewActive = selectedPosition !== null;
     for (const player of gameData.players || []) {
@@ -890,7 +901,7 @@
       panY = pinchState.panY + midpoint.y - pinchState.midpoint.y;
       applyMapTransform();
       invalidateDynamic();
-      drawDynamic();
+      scheduleDynamicDraw();
       return;
     }
     if (!dragStart) return;
@@ -900,13 +911,13 @@
     applyMapTransform();
     hoverPosition = positionFromPointer(event);
     invalidateDynamic();
-    drawDynamic();
+    scheduleDynamicDraw();
   });
 
   mapFrame.addEventListener('pointerleave', function () {
     hoverPosition = null;
     invalidateDynamic();
-    drawDynamic();
+    scheduleDynamicDraw();
   });
 
   function stopDragging(event) {
