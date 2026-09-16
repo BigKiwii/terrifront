@@ -26,7 +26,7 @@
   const winnerBanner = document.querySelector('#winner-banner');
   const attackRatioPanel = document.querySelector('#attack-ratio-panel');
   const powerSlider = document.querySelector('#power-slider');
-  const context = canvas.getContext('2d', { willReadFrequently: true });
+  const context = canvas.getContext('2d');
   const dynamicContext = dynamicCanvas.getContext('2d');
   const terrainCanvas = document.createElement('canvas');
   const terrainContext = terrainCanvas.getContext('2d');
@@ -90,6 +90,10 @@
   let territoryLayerDirty = false;
   let localWaterBorderVersion = -1;
   let localPlayerHasWaterBorder = false;
+  let dirtyMinX = Infinity;
+  let dirtyMinY = Infinity;
+  let dirtyMaxX = -Infinity;
+  let dirtyMaxY = -Infinity;
   let lastLabelDrawAt = 0;
   let labelDrawFrame = null;
   let dynamicDrawFrame = null;
@@ -523,7 +527,15 @@
       affected.add(change.position);
       for (const neighbor of mapNeighbors(change.position)) affected.add(neighbor);
     }
-    for (const position of affected) paintTerritoryTile(position);
+    for (const position of affected) {
+      paintTerritoryTile(position);
+      const x = position % gameData.map.width;
+      const y = Math.floor(position / gameData.map.width);
+      dirtyMinX = Math.min(dirtyMinX, x);
+      dirtyMinY = Math.min(dirtyMinY, y);
+      dirtyMaxX = Math.max(dirtyMaxX, x);
+      dirtyMaxY = Math.max(dirtyMaxY, y);
+    }
     territoryLayerDirty = true;
     renderState.sceneDirty = true;
   }
@@ -717,8 +729,18 @@
     const width = gameData.map.width;
     const height = gameData.map.height;
     if (territoryLayerDirty) {
-      territoryContext.putImageData(territoryImageData, 0, 0);
-      composeSceneLayer();
+      if (dirtyMinX <= dirtyMaxX && dirtyMinY <= dirtyMaxY) {
+        const dirtyWidth = dirtyMaxX - dirtyMinX + 1;
+        const dirtyHeight = dirtyMaxY - dirtyMinY + 1;
+        territoryContext.putImageData(territoryImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+        sceneContext.clearRect(dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+        sceneContext.drawImage(terrainCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+        sceneContext.drawImage(territoryCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+      }
+      dirtyMinX = Infinity;
+      dirtyMinY = Infinity;
+      dirtyMaxX = -Infinity;
+      dirtyMaxY = -Infinity;
       territoryLayerDirty = false;
     }
     if (!renderState.sceneDirty) return;
