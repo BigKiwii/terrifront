@@ -174,7 +174,6 @@
     const alpha = 1 - Math.exp(-deltaMs / TROOP_SMOOTHING_MS);
     displayTroops += (targetTroops - displayTroops) * alpha;
     if (Math.abs(targetTroops - displayTroops) < 0.5) displayTroops = targetTroops;
-    updateActiveAttacks(activeAttacks);
   }
 
   function renderFrame(timestamp) {
