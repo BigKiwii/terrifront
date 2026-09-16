@@ -100,7 +100,8 @@ class ExpansionManager {
       targetPosition: targetOwnerId === 0 ? targetPosition : null,
       neutralMomentum: false,
       frontTiles: frontTiles ? new Set(frontTiles) : null,
-      borderTiles: new Set(frontTiles || this.territory.getBorderSet(ownerId))
+      borderTiles: new Set(frontTiles || this.territory.getBorderSet(ownerId)),
+      frontierDirty: false
     };
     const candidates = this.getAttackCandidates(attack);
     if (candidates.size === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
@@ -118,6 +119,7 @@ class ExpansionManager {
     for (const attack of this.attacks.values()) {
       const currentSlot = attack.tileQueue.get(attack.queueSlot);
       if (currentSlot) attack.tileQueue.delete(attack.queueSlot);
+      attack.frontierDirty = false;
       for (const position of currentSlot || []) {
         attack.scheduledTiles -= 1;
         attack.queued.delete(position);
@@ -132,6 +134,10 @@ class ExpansionManager {
           break;
         }
         attack.troops -= result.attackerLoss;
+        attack.frontierDirty = true;
+        for (const otherAttack of this.attacks.values()) {
+          if (otherAttack.ownerId === attack.ownerId) otherAttack.frontierDirty = true;
+        }
         tickChanges.push({ position, owner: attack.ownerId });
         for (const releasedPosition of result.releasedPositions || []) {
           tickChanges.push({ position: releasedPosition, owner: 0 });
@@ -151,7 +157,9 @@ class ExpansionManager {
         this.scheduleCandidates(attack, frontier);
       }
 
-      this.scheduleCandidates(attack, this.getAttackCandidates(attack));
+      if (attack.frontierDirty || attack.scheduledTiles === 0) {
+        this.scheduleCandidates(attack, this.getAttackCandidates(attack));
+      }
       attack.queueSlot = (attack.queueSlot + 1) % MAX_SCHEDULE_TICKS;
       if (attack.troops <= 0 || (attack.scheduledTiles <= 0 && attack.tileQueue.size === 0)) attacksToFinish.push(attack);
     }

@@ -43,6 +43,16 @@ function createMap(sourceTerrain, width, height, sourceExpansionTimes) {
   const expansionTimes = sourceExpansionTimes
     ? Uint8Array.from(sourceExpansionTimes)
     : new Uint8Array(cellCount).fill(50);
+  const neighborTable = new Array(cellCount);
+  for (let position = 0; position < cellCount; position += 1) {
+    const x = position % width;
+    const neighbors = [];
+    if (x > 0) neighbors.push(position - 1);
+    if (x < width - 1) neighbors.push(position + 1);
+    if (position >= width) neighbors.push(position - width);
+    if (position < cellCount - width) neighbors.push(position + width);
+    neighborTable[position] = neighbors;
+  }
 
   return {
     mapId: MAP_ID,
@@ -61,13 +71,7 @@ function createMap(sourceTerrain, width, height, sourceExpansionTimes) {
       return (terrain[position] & TERRAIN_LAND) !== 0;
     },
     getNeighbors(position) {
-      const x = position % width;
-      const neighbors = [];
-      if (x > 0) neighbors.push(position - 1);
-      if (x < width - 1) neighbors.push(position + 1);
-      if (position >= width) neighbors.push(position - width);
-      if (position < cellCount - width) neighbors.push(position + width);
-      return neighbors;
+      return neighborTable[position] || [];
     },
     getCapitalCells(centerPosition) {
       const centerX = centerPosition % width;
