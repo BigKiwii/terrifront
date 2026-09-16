@@ -156,8 +156,18 @@ class GameEngine {
       this.economyTickCount += 1;
       this.collectIncome();
     }
-    if (changes.length === 0 && !economyTick && this.boatManager.boats.size === 0 && this.expansionManager.attacks.size === 0) return null;
-    return this.getTickState(changes);
+
+    // Fast-exit: nothing happened this tick at all — no tile changes, no
+    // economy update, no active boats or attacks that need a heartbeat.
+    // Skip getTickState entirely; all of its work would produce an empty packet.
+    if (
+      changes.length === 0 &&
+      !economyTick &&
+      this.boatManager.boats.size === 0 &&
+      this.expansionManager.attacks.size === 0
+    ) return null;
+
+    return this.getTickState(changes, economyTick);
   }
 
   requestExpansion(playerId, position, power = 1000) {
@@ -269,39 +279,70 @@ class GameEngine {
     };
   }
 
-  getTickState(changes) {
-    const players = [];
-    for (const player of this.players.values()) {
-      const snapshot = this.getPlayerSnapshot(player);
-      const previous = player._sent || { troops: -1, territorySize: -1, flags: -1 };
-      if (snapshot.troops !== previous.troops || snapshot.territorySize !== previous.territorySize || snapshot.flags !== previous.flags) {
-        players.push({
-          playerId: snapshot.playerId,
-          playerName: snapshot.playerName,
-          troops: snapshot.troops,
-          territorySize: snapshot.territorySize,
-          expansionActive: snapshot.expansionActive,
-          isBot: snapshot.isBot,
-          isWinner: snapshot.isWinner,
-          spawnPosition: snapshot.spawnPosition,
-          capitalColor: snapshot.capitalColor,
-          isAlive: snapshot.isAlive
-        });
-        player._sent = {
-          troops: snapshot.troops,
-          territorySize: snapshot.territorySize,
-          flags: snapshot.flags
-        };
+  getTickState(changes, economyTick = false) {
+    // Only iterate players when something could have made them dirty:
+    // tile changes (captures alter territorySize), economy ticks (troops change),
+    // or a winner being decided this tick (flags change).
+    const playersDirty = changes.length > 0 || economyTick || this.winnerId !== null;
+    let players = null;
+
+    if (playersDirty) {
+      for (const player of this.players.values()) {
+        const snapshot = this.getPlayerSnapshot(player);
+        const previous = player._sent || { troops: -1, territorySize: -1, flags: -1 };
+        if (
+          snapshot.troops !== previous.troops ||
+          snapshot.territorySize !== previous.territorySize ||
+          snapshot.flags !== previous.flags
+        ) {
+          if (players === null) players = [];
+          players.push({
+            playerId: snapshot.playerId,
+            playerName: snapshot.playerName,
+            troops: snapshot.troops,
+            territorySize: snapshot.territorySize,
+            expansionActive: snapshot.expansionActive,
+            isBot: snapshot.isBot,
+            isWinner: snapshot.isWinner,
+            spawnPosition: snapshot.spawnPosition,
+            capitalColor: snapshot.capitalColor,
+            isAlive: snapshot.isAlive
+          });
+          player._sent = {
+            troops: snapshot.troops,
+            territorySize: snapshot.territorySize,
+            flags: snapshot.flags
+          };
+        }
       }
     }
+
+    // If nothing is dirty at all — no tile changes, no dirty players, no winner
+    // flip — and we only arrived here because boats/attacks need a heartbeat,
+    // skip the packet entirely rather than sending empty noise.
+    const hasBoats = this.boatManager.boats.size > 0;
+    const hasAttacks = this.expansionManager.attacks.size > 0;
+    if (
+      changes.length === 0 &&
+      (players === null || players.length === 0) &&
+      !this.winnerId &&
+      !hasBoats &&
+      !hasAttacks
+    ) return null;
+
+    // serialize() and getActiveAttacks() only run when we know a packet is
+    // going out. Both allocate arrays, so guarding them matters on quiet ticks
+    // where only boats/attacks are active but no tiles changed.
+    const boats = hasBoats ? this.boatManager.serialize() : [];
+    const activeAttacks = hasAttacks ? this.expansionManager.getActiveAttacks() : [];
 
     return {
       gameId: this.gameId,
       tickCount: this.tickCount,
       changes,
-      players,
-      boats: this.boatManager.serialize(),
-      activeAttacks: this.expansionManager.getActiveAttacks(),
+      players: players ?? [],
+      boats,
+      activeAttacks,
       winnerId: this.winnerId
     };
   }

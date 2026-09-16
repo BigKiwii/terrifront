@@ -22,8 +22,7 @@ class TerritoryManager {
   }
 
   getBorderTiles(ownerId) {
-    if (!this.borderTiles.has(ownerId)) this.rebuildBorders(ownerId);
-    return [...this.borderTiles.get(ownerId)];
+    return [...this.getBorderSet(ownerId)];
   }
 
   rebuildBorders(ownerId) {

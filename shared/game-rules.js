@@ -10,7 +10,7 @@ const BOT_COUNT = 50;
 const BOAT_TILES_PER_TICK = 0.6;            // 40% slower than the original speed
 const BOAT_DECAY_PER_TICK = 0.004;          // ~7.7% of the cargo per second
 const BOAT_MIN_TROOPS = 1;                  // below this the crossing is lost
-const BOAT_MAX_SEARCH_CELLS = 250000;       // bound on the water pathfind
+const BOAT_MAX_SEARCH_CELLS = 50000;        // bound on the water pathfind; 50k is ample for any crossing on this map
 const BOAT_MAX_FRONT_TILES = 20000;         // bound on the beachhead front search
 
 module.exports = {

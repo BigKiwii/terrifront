@@ -29,6 +29,36 @@ function getScratch(cellCount) {
   return scratch;
 }
 
+// Shore-distance map shared by every room. Terrain never changes between rooms,
+// so one BFS result covers all of them. Keyed by cellCount; if the map ever
+// changes size (test maps etc.) the cache is rebuilt automatically.
+let shoreDistanceCache = null;
+function getShoreDistance(map) {
+  if (shoreDistanceCache && shoreDistanceCache.length === map.cellCount) {
+    return shoreDistanceCache;
+  }
+  const cellCount = map.cellCount;
+  const distances = new Uint8Array(cellCount).fill(255);
+  const queue = [];
+  for (let position = 0; position < cellCount; position += 1) {
+    if (!map.isLand(position)) continue;
+    distances[position] = 0;
+    queue.push(position);
+  }
+  let head = 0;
+  while (head < queue.length) {
+    const position = queue[head++];
+    const currentDistance = distances[position];
+    for (const neighbor of map.getNeighbors(position)) {
+      if (distances[neighbor] !== 255) continue;
+      distances[neighbor] = currentDistance + 1;
+      queue.push(neighbor);
+    }
+  }
+  shoreDistanceCache = distances;
+  return distances;
+}
+
 class BoatManager {
   constructor(map, territory, players, expansionManager) {
     this.map = map;
@@ -38,33 +68,12 @@ class BoatManager {
     this.boats = new Map();
     this.nextBoatId = 1;
     this.activeBoatOwners = new Set();
-    this.shoreDistance = null;
 
     this.scratch = getScratch(map.cellCount);
-    this.buildShoreDistance();
-  }
-
-  buildShoreDistance() {
-    if (this.shoreDistance) return;
-    const cellCount = this.map.cellCount;
-    const distances = new Uint8Array(cellCount).fill(255);
-    const queue = [];
-    for (let position = 0; position < cellCount; position += 1) {
-      if (!this.map.isLand(position)) continue;
-      distances[position] = 0;
-      queue.push(position);
-    }
-    let head = 0;
-    while (head < queue.length) {
-      const position = queue[head++];
-      const currentDistance = distances[position];
-      for (const neighbor of this.map.getNeighbors(position)) {
-        if (distances[neighbor] !== 255) continue;
-        distances[neighbor] = currentDistance + 1;
-        queue.push(neighbor);
-      }
-    }
-    this.shoreDistance = distances;
+    // Shore-distance is terrain-only and never changes between rooms.
+    // getShoreDistance builds it once and returns the cached result for all
+    // subsequent rooms, so this is O(cellCount) exactly once per process.
+    this.shoreDistance = getShoreDistance(map);
   }
 
   isWater(position) {

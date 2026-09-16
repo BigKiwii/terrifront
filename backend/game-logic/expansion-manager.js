@@ -49,7 +49,7 @@ class ExpansionManager {
       existingAttack.troops += exactTroops;
       // Rebuild the full border so the merged attack radiates from everywhere,
       // then clear and reschedule all pending tiles with updated troop count.
-      existingAttack.borderTiles = new Set(this.territory.getBorderTiles(ownerId));
+      existingAttack.borderTiles = new Set(this.territory.getBorderSet(ownerId));
       const pendingTiles = [];
       for (const slotTiles of existingAttack.tileQueue.values()) pendingTiles.push(...slotTiles);
       existingAttack.tileQueue.clear();
@@ -76,7 +76,7 @@ class ExpansionManager {
       targetPosition: targetOwnerId === 0 ? targetPosition : null,
       neutralMomentum: false,
       frontTiles: frontTiles ? new Set(frontTiles) : null,
-      borderTiles: new Set(frontTiles || this.territory.getBorderTiles(ownerId))
+      borderTiles: new Set(frontTiles || this.territory.getBorderSet(ownerId))
     };
     const candidates = this.getAttackCandidates(attack);
     if (candidates.size === 0) return { accepted: false, reason: 'NO_BORDER_TERRITORY' };
@@ -214,10 +214,25 @@ class ExpansionManager {
 
   getAttackCandidates(attack) {
     const candidates = new Set();
-    const frontier = attack.frontTiles
-      ? [...attack.frontTiles].filter((position) => this.territory.isOwnedBy(position, attack.ownerId))
-      : this.territory.getBorderTiles(attack.ownerId);
-    attack.borderTiles = new Set(frontier);
+    if (attack.frontTiles) {
+      // frontTiles is a constrained set (boat landing beachhead). Filter to
+      // tiles still owned by the attacker, rebuild borderTiles from the result,
+      // then collect neighbours that are valid targets.
+      attack.borderTiles.clear();
+      for (const position of attack.frontTiles) {
+        if (this.territory.isOwnedBy(position, attack.ownerId)) {
+          attack.borderTiles.add(position);
+        }
+      }
+    } else {
+      // Normal attack: use the live border Set from TerritoryManager directly.
+      // getBorderSet returns the internal Set — do NOT mutate it. We rebuild
+      // attack.borderTiles from it so refreshAttackBorder can still track the
+      // per-attack frontier independently.
+      const liveBorder = this.territory.getBorderSet(attack.ownerId);
+      attack.borderTiles.clear();
+      for (const position of liveBorder) attack.borderTiles.add(position);
+    }
     for (const border of attack.borderTiles) {
       for (const neighbor of this.map.getNeighbors(border)) {
         if (this.isTargetTile(neighbor, attack)) candidates.add(neighbor);
