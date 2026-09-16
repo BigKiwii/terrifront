@@ -120,9 +120,14 @@ class GameMaster {
     return player.engine.requestBoat(playerId, position, power);
   }
 
-  startTicker(onUpdate) {
+  startTicker(onUpdate, onGameStarted = () => {}) {
     if (this.tickHandle) return;
     this.tickHandle = setInterval(() => {
+      for (const game of this.games.values()) {
+        if (game.phase !== 'SPAWNING' || Date.now() < game.spawnDeadline) continue;
+        const state = game.finalizeSpawnPhase();
+        if (state) onGameStarted(state);
+      }
       for (const update of this.tick()) onUpdate(update);
     }, 50);
   }

@@ -104,14 +104,6 @@ async function startLobbyMatch(lobby) {
     socket.send(encodeSpawnPhaseStarted(game.playerId, match.spawnPhase, match.engine.getState()));
   }
 
-  setTimeout(() => {
-    gameMaster.finalizeGame(match.gameId);
-    const state = match.engine.getState();
-    const matchSockets = gameSockets.get(match.gameId) || new Set();
-    for (const socket of matchSockets) {
-      if (socket.readyState === WebSocket.OPEN) socket.send(encodeGameStarted(state));
-    }
-  }, match.spawnPhase.durationMs);
 }
 
 const lobbyManager = new LobbyManager({ onStart: startLobbyMatch });
@@ -273,6 +265,12 @@ function isAuthorizedMatchAction(socket, playerId) {
 gameMaster.startTicker((update) => {
   const sockets = gameSockets.get(update.gameId) || new Set();
   const payload = encodeGameUpdate(update);
+  for (const socket of sockets) {
+    if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+  }
+}, (state) => {
+  const sockets = gameSockets.get(state.gameId) || new Set();
+  const payload = encodeGameStarted(state);
   for (const socket of sockets) {
     if (socket.readyState === WebSocket.OPEN) socket.send(payload);
   }

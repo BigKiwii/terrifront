@@ -1,5 +1,10 @@
 const MAX_POWER = 1000;
 const MAX_SCHEDULE_TICKS = 135;
+const SPEED_BOOST_THRESHOLDS = [
+  { territorySize: 3000, boost: 0.20 },
+  { territorySize: 10000, boost: 0.25 },
+  { territorySize: 20000, boost: 0.30 }
+];
 const tickChanges = [];
 const attacksToFinish = [];
 
@@ -25,6 +30,21 @@ class ExpansionManager {
     const troops = Math.min(player.troops, Math.floor(player.troops * normalizedPower / MAX_POWER));
     if (troops < 1) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
     return this.startWithTroops(playerId, troops, targetPosition, frontTiles);
+  }
+
+  reinforceNeutralAttack(playerId, power = 100) {
+    const player = this.players.get(playerId);
+    if (!player) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
+    const attack = [...this.attacks.values()].find((activeAttack) =>
+      activeAttack.playerId === playerId && activeAttack.targetOwnerId === 0
+    );
+    if (!attack) return { accepted: false, reason: 'NO_ACTIVE_NEUTRAL_ATTACK' };
+    const normalizedPower = Math.max(0, Math.min(MAX_POWER, Number(power) || 0));
+    const troops = Math.min(player.troops, Math.floor(player.troops * normalizedPower / MAX_POWER));
+    if (troops < 1) return { accepted: false, reason: 'NOT_ENOUGH_TROOPS' };
+    player.troops = Math.max(0, player.troops - troops);
+    attack.troops += troops;
+    return { accepted: true, playerId, troops, attackId: attack.id, merged: true };
   }
 
   startWithTroops(playerId, troops, targetPosition = null, frontTiles = null) {
@@ -186,13 +206,30 @@ class ExpansionManager {
   }
 
   getSpeedFactor(attack) {
-    if (attack.targetOwnerId === 0) return 1;
+    const attackerTerritorySize = this.territory.getTerritorySize(attack.ownerId);
     const defender = this.players.get(`player-${attack.targetOwnerId}`);
     const attacker = this.players.get(attack.playerId);
-    if (!defender || !attacker) return 1;
-    const attackerPower = Math.max(1, this.territory.getTerritorySize(attack.ownerId)) * Math.max(1, attack.troops);
+    const territoryBoost = attacker?.isBot ? 1 : this.getTerritorySpeedBoost(attackerTerritorySize);
+    if (attack.targetOwnerId === 0) return 1 / territoryBoost;
+    if (!defender || !attacker) return 1 / territoryBoost;
+    const attackerPower = Math.max(1, attackerTerritorySize) * Math.max(1, attack.troops);
     const defenderPower = Math.max(1, this.territory.getTerritorySize(attack.targetOwnerId)) * Math.max(1, defender.troops);
-    return 2 / (0.325 + Math.log(1 + Math.min(50, attackerPower / defenderPower)));
+    return 2 / (0.325 + Math.log(1 + Math.min(50, attackerPower / defenderPower))) / territoryBoost;
+  }
+
+  getTerritorySpeedBoost(territorySize) {
+    if (territorySize <= 0) return 1;
+    let previousThreshold = 0;
+    let previousBoost = 0;
+    for (const threshold of SPEED_BOOST_THRESHOLDS) {
+      if (territorySize <= threshold.territorySize) {
+        const progress = (territorySize - previousThreshold) / (threshold.territorySize - previousThreshold);
+        return 1 + previousBoost + (threshold.boost - previousBoost) * progress;
+      }
+      previousThreshold = threshold.territorySize;
+      previousBoost = threshold.boost;
+    }
+    return 1 + SPEED_BOOST_THRESHOLDS[SPEED_BOOST_THRESHOLDS.length - 1].boost;
   }
 
   scheduleCandidates(attack, candidates) {

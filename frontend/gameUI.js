@@ -87,6 +87,7 @@
   const attackCardState = new Map();
 
   let territoryImageData = null;
+  let territoryLayerDirty = false;
   let localWaterBorderVersion = -1;
   let localPlayerHasWaterBorder = false;
   let lastLabelDrawAt = 0;
@@ -514,14 +515,15 @@
   }
 
   function updateTerritoryLayer(changes) {
+    if (!territoryImageData) return;
     const affected = new Set();
     for (const change of changes || []) {
       affected.add(change.position);
       for (const neighbor of mapNeighbors(change.position)) affected.add(neighbor);
     }
     for (const position of affected) paintTerritoryTile(position);
-    if (territoryImageData) territoryContext.putImageData(territoryImageData, 0, 0);
-    composeSceneLayer();
+    territoryLayerDirty = true;
+    renderState.sceneDirty = true;
   }
 
   function composeSceneLayer() {
@@ -712,6 +714,11 @@
     if (!gameData || !terrain) return;
     const width = gameData.map.width;
     const height = gameData.map.height;
+    if (territoryLayerDirty) {
+      territoryContext.putImageData(territoryImageData, 0, 0);
+      composeSceneLayer();
+      territoryLayerDirty = false;
+    }
     if (!renderState.sceneDirty) return;
     context.clearRect(0, 0, width, height);
     context.drawImage(sceneCanvas, 0, 0, width, height);

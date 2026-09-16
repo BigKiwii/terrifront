@@ -150,7 +150,7 @@ function boundedU24(value) {
 }
 
 function writePlayer(writer, player, includeDetails) {
-  writer.u16(playerNumber(player.playerId));
+  writer.u32(playerNumber(player.playerId));
   if (includeDetails) writer.string(player.playerName || '');
   writer.u24(boundedU24(player.troops));
   writer.u24(boundedU24(player.territorySize));
@@ -162,7 +162,7 @@ function writePlayer(writer, player, includeDetails) {
 }
 
 function readPlayer(reader, includeDetails) {
-  const playerId = `player-${reader.u16()}`;
+  const playerId = `player-${reader.u32()}`;
   const player = { playerId };
   if (includeDetails) player.playerName = reader.string();
   player.troops = reader.u24();
@@ -217,7 +217,7 @@ function encodeLobbyState(state, playerId) {
   writer.u16(state.players.length);
   writer.u16(state.maxPlayers);
   for (const player of state.players) {
-    writer.u16(playerNumber(player.playerId));
+    writer.u32(playerNumber(player.playerId));
     writer.string(player.playerName);
     writer.u8(player.ready ? 1 : 0);
   }
@@ -279,8 +279,8 @@ function writeActiveAttacks(writer, attacks) {
   writer.u16(attacks.length);
   for (const attack of attacks) {
     writer.u32(attack.id);
-    writer.u16(playerNumber(attack.playerId));
-    writer.u16(attack.targetOwnerId || 0);
+    writer.u32(playerNumber(attack.playerId));
+    writer.u32(attack.targetOwnerId || 0);
     writer.u24(boundedU24(attack.troops));
   }
 }
@@ -288,7 +288,7 @@ function writeActiveAttacks(writer, attacks) {
 function readActiveAttacks(reader) {
   const attacks = [];
   for (let index = 0, count = reader.u16(); index < count; index += 1) {
-    attacks.push({ id: reader.u32(), playerId: `player-${reader.u16()}`, targetOwnerId: reader.u16(), troops: reader.u24() });
+    attacks.push({ id: reader.u32(), playerId: `player-${reader.u32()}`, targetOwnerId: reader.u32(), troops: reader.u24() });
   }
   return attacks;
 }
@@ -310,11 +310,11 @@ function encodeGameUpdate(state) {
     writer.u16(state.players.length);
     for (const player of state.players) writePlayer(writer, player, false);
   }
-  if (state.winnerId) writer.u16(playerNumber(state.winnerId));
+  if (state.winnerId) writer.u32(playerNumber(state.winnerId));
   if (boats.length) {
     writer.u16(boats.length);
     for (const boat of boats) {
-      writer.u16(boat.ownerId);
+      writer.u32(boat.ownerId);
       writer.u32(boat.position);
       writer.u16(boat.troops || 0);
     }
@@ -369,7 +369,7 @@ function decodeServerMessage(value) {
     const maxPlayers = reader.u16();
     for (let index = 0; index < count; index += 1) {
       players.push({
-        playerId: `player-${reader.u16()}`,
+        playerId: `player-${reader.u32()}`,
         playerName: reader.string(),
         ready: Boolean(reader.u8())
       });
@@ -390,11 +390,11 @@ function decodeServerMessage(value) {
     const changes = flags & 1 ? readChanges(reader) : [];
     const players = [];
     if (flags & 2) for (let index = 0, count = reader.u16(); index < count; index += 1) players.push(readPlayer(reader, false));
-    const winnerId = flags & 4 ? `player-${reader.u16()}` : null;
+    const winnerId = flags & 4 ? `player-${reader.u32()}` : null;
     const boats = [];
     if (flags & 8) {
       for (let index = 0, count = reader.u16(); index < count; index += 1) {
-        boats.push({ ownerId: reader.u16(), position: reader.u32(), troops: reader.u16() });
+        boats.push({ ownerId: reader.u32(), position: reader.u32(), troops: reader.u16() });
       }
     }
     const activeAttacks = flags & 16 ? readActiveAttacks(reader) : [];
@@ -409,11 +409,11 @@ function decodeClientMessage(value) {
   const opcode = reader.u8();
   if (opcode === OP.REQUEST_GAME) return { opcode, playerName: reader.string() };
   if (opcode === OP.JOIN_LOBBY) return { opcode, playerName: reader.string() };
-  if (opcode === OP.SPAWN_POSITION) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32() };
-  if (opcode === OP.EXPANSION_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
-  if (opcode === OP.CANCEL_EXPANSION) return { opcode, playerId: `player-${reader.u16()}`, attackId: reader.u32() };
-  if (opcode === OP.BOAT_REQUEST) return { opcode, playerId: `player-${reader.u16()}`, position: reader.u32(), power: reader.u16() };
-  if (opcode === OP.LEAVE_LOBBY) return { opcode, playerId: `player-${reader.u16()}` };
+  if (opcode === OP.SPAWN_POSITION) return { opcode, playerId: `player-${reader.u32()}`, position: reader.u32() };
+  if (opcode === OP.EXPANSION_REQUEST) return { opcode, playerId: `player-${reader.u32()}`, position: reader.u32(), power: reader.u16() };
+  if (opcode === OP.CANCEL_EXPANSION) return { opcode, playerId: `player-${reader.u32()}`, attackId: reader.u32() };
+  if (opcode === OP.BOAT_REQUEST) return { opcode, playerId: `player-${reader.u32()}`, position: reader.u32(), power: reader.u16() };
+  if (opcode === OP.LEAVE_LOBBY) return { opcode, playerId: `player-${reader.u32()}` };
   throw new Error(`Unknown client opcode: ${opcode}`);
 }
 
@@ -422,7 +422,7 @@ if (typeof module !== 'undefined' && module.exports) {
 }
 
 if (typeof window !== 'undefined') {
-  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestLobby: () => new Uint8Array([OP.REQUEST_LOBBY]), encodeJoinLobby: (name) => encodeClientRequest(OP.JOIN_LOBBY, writer => writer.string(name)), encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u16(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id, attackId = 0) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => { writer.u16(playerNumber(id)); writer.u32(attackId); }), encodeBoatRequest: (id, position, power) => encodeClientRequest(OP.BOAT_REQUEST, writer => { writer.u16(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeLeaveLobby: (id) => encodeClientRequest(OP.LEAVE_LOBBY, writer => writer.u16(playerNumber(id))) };
+  window.TerriBinaryProtocol = { OP, decodeServerMessage, encodeRequestLobby: () => new Uint8Array([OP.REQUEST_LOBBY]), encodeJoinLobby: (name) => encodeClientRequest(OP.JOIN_LOBBY, writer => writer.string(name)), encodeRequestGame: (name) => encodeClientRequest(OP.REQUEST_GAME, writer => writer.string(name)), encodeSpawnPosition: (id, position) => encodeClientRequest(OP.SPAWN_POSITION, writer => { writer.u32(playerNumber(id)); writer.u32(position); }), encodeExpansionRequest: (id, position, power) => encodeClientRequest(OP.EXPANSION_REQUEST, writer => { writer.u32(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeCancelExpansion: (id, attackId = 0) => encodeClientRequest(OP.CANCEL_EXPANSION, writer => { writer.u32(playerNumber(id)); writer.u32(attackId); }), encodeBoatRequest: (id, position, power) => encodeClientRequest(OP.BOAT_REQUEST, writer => { writer.u32(playerNumber(id)); writer.u32(position); writer.u16(power); }), encodeLeaveLobby: (id) => encodeClientRequest(OP.LEAVE_LOBBY, writer => writer.u32(playerNumber(id))) };
 }
 
 function encodeClientRequest(opcode, writePayload) {

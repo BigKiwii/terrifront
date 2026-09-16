@@ -2,11 +2,12 @@ const { loadMap, cloneMap } = require('../game-logic/map-generator');
 const SpawnManager = require('../game-logic/spawn-manager');
 const TerritoryManager = require('../game-logic/territory-manager');
 const ExpansionManager = require('../game-logic/expansion-manager');
-const { BotManager } = require('../game-logic/bot-manager');
+const { BotManager } = require('../bots/bot-manager');
 const BoatManager = require('../game-logic/boat-manager');
 const {
   ECONOMY_TICKS_PER_SECOND,
-  BOT_COUNT
+  BOT_COUNT,
+  BOT_TROOP_INCOME_MULTIPLIER
 } = require('../../shared/game-rules');
 
 class GameEngine {
@@ -77,7 +78,7 @@ class GameEngine {
       }
     }
     this.phase = 'ACTIVE';
-    this.botManager = new BotManager(this.map, this.territoryManager, this.expansionManager, this.players);
+    this.botManager = new BotManager(this.map, this.territoryManager, this.expansionManager, this.players, this.boatManager);
     this.startTicker();
     return this.getState();
   }
@@ -214,7 +215,9 @@ class GameEngine {
       const partA = Math.floor(tiles / 10);
       const exponent = 1 - Math.log(current + 1) / Math.LN2;
       const partB = Math.floor(Math.pow(3 / 5, exponent));
-      player.troops = Math.min(maxTroops, current + Math.max(1, partA + partB));
+      const income = Math.max(1, partA + partB);
+      const botMultiplier = player.isBot ? BOT_TROOP_INCOME_MULTIPLIER : 1;
+      player.troops = Math.min(maxTroops, current + Math.max(1, Math.floor(income * botMultiplier)));
     }
   }
 
