@@ -3,7 +3,7 @@ const SIMULATION_TICK_MS = 50;
 const ECONOMY_TICKS_PER_SECOND = 10;
 const ECONOMY_CYCLE_SECONDS = 10;
 const NAME_DISPLAY_TERRITORY = 50;
-const BOT_COUNT = 150;
+const BOT_COUNT = 100;
 const BOT_TROOP_INCOME_MULTIPLIER = 0.65;
 
 // Boating: troops ferried across water lose strength every tick, so long
