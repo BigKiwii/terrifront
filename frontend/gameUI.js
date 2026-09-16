@@ -189,7 +189,7 @@
     smoothTroops(deltaMs);
     if (renderState.sceneDirty) drawScene();
     if (renderState.dynamicDirty) drawDynamic();
-    if (renderState.labelsDirty && !isMapGestureActive() && performance.now() - lastLabelDrawAt >= LABEL_UPDATE_INTERVAL_MS) {
+    if (renderState.labelsDirty && (renderState.labelsCameraDirty || performance.now() - lastLabelDrawAt >= LABEL_UPDATE_INTERVAL_MS)) {
       drawLabels();
     }
     requestAnimationFrame(renderFrame);
@@ -223,18 +223,9 @@
     panX = clamp(panX, -maxPanX, maxPanX);
     panY = clamp(panY, -maxPanY, maxPanY);
     mapFrame.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
-    renderState.labelsDirty = true;
     renderState.labelsCameraDirty = true;
     hideMapMenu();
-  }
-
-  function isMapGestureActive() {
-    return dragStart !== null || pinchState !== null;
-  }
-
-  function requestLabelRedraw() {
-    renderState.labelsDirty = true;
-    renderState.labelsCameraDirty = true;
+    TerriPlayerLabelRenderer.invalidateLayout();
     scheduleLabelDraw();
   }
 
@@ -954,10 +945,7 @@
   function stopDragging(event) {
     activePointers.delete(event.pointerId);
     if (pinchState) {
-      if (activePointers.size < 2) {
-        pinchState = null;
-        requestLabelRedraw();
-      }
+      if (activePointers.size < 2) pinchState = null;
       dragStart = null;
       if (mapFrame.hasPointerCapture(event.pointerId)) mapFrame.releasePointerCapture(event.pointerId);
       return;
@@ -966,7 +954,6 @@
     const wasClick = !dragMoved;
     dragStart = null;
     mapFrame.classList.remove('is-dragging');
-    requestLabelRedraw();
     if (mapFrame.hasPointerCapture(event.pointerId)) mapFrame.releasePointerCapture(event.pointerId);
     if (wasClick && spawnPhase && !selectionLocked) {
       const position = positionFromPointer(event);
