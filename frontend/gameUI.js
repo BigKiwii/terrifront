@@ -747,7 +747,7 @@
 
   function attackMergeKey(attack) {
     const targetOwnerId = Number(attack.targetOwnerId) || 0;
-    return targetOwnerId ? `owner-${targetOwnerId}` : `id-${attack.id}`;
+    return targetOwnerId ? `owner-${targetOwnerId}` : `neutral-${attack.playerId}`;
   }
 
   function updateActiveAttacks(attacks) {
@@ -757,8 +757,11 @@
     for (const attack of activeAttacks) {
       if (attack.playerId !== localPlayerId || attack.troops <= 0) continue;
       const key = attackMergeKey(attack);
-      if (mergedMap.has(key)) mergedMap.get(key).troops += attack.troops;
-      else mergedMap.set(key, { ...attack });
+      if (mergedMap.has(key)) {
+        const merged = mergedMap.get(key);
+        merged.troops += attack.troops;
+        merged.attackIds.push(attack.id);
+      } else mergedMap.set(key, { ...attack, attackIds: [attack.id] });
     }
 
     const mergedAttacks = [...mergedMap.values()];
@@ -776,6 +779,11 @@
         if (existingCards.has(key)) {
           const card = existingCards.get(key);
           card.querySelector('.active-attack-troops').textContent = `${formatTroops(attack.troops)} troops`;
+          card.querySelector('.active-attack-cancel').onclick = () => {
+            for (const attackId of attack.attackIds) {
+              window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId, attackId));
+            }
+          };
           if (previousTroops !== undefined && attack.troops > previousTroops) {
             const gain = card.querySelector('.active-attack-gain');
             const gainState = attackCardState.get(key);
@@ -784,7 +792,7 @@
             clearTimeout(gainState.fadeTimer);
             gainState.fadeTimer = setTimeout(() => gain.classList.add('is-fading'), 1800);
           }
-          attackCardState.set(key, { ...attackCardState.get(key), troops: attack.troops });
+          attackCardState.set(key, { ...attackCardState.get(key), troops: attack.troops, attackIds: attack.attackIds });
           return;
         }
         const card = document.createElement('div');
@@ -800,12 +808,14 @@
         cancel.type = 'button';
         cancel.setAttribute('aria-label', 'Cancel attack');
         cancel.textContent = 'x';
-        cancel.addEventListener('click', () => {
-          window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId, attack.id));
-        });
         card.append(count, gain, cancel);
         activeAttacksPanel.appendChild(card);
-        attackCardState.set(key, { troops: attack.troops, fadeTimer: null });
+        cancel.onclick = () => {
+          for (const attackId of attack.attackIds) {
+            window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId, attackId));
+          }
+        };
+        attackCardState.set(key, { troops: attack.troops, attackIds: attack.attackIds, fadeTimer: null });
       });
     for (const [key, card] of existingCards) {
       if (!seenKeys.has(key)) {
@@ -814,6 +824,11 @@
         if (state) clearTimeout(state.fadeTimer);
         attackCardState.delete(key);
       }
+    }
+    for (const [key, state] of attackCardState) {
+      if (seenKeys.has(key)) continue;
+      if (state.fadeTimer) clearTimeout(state.fadeTimer);
+      attackCardState.delete(key);
     }
   }
 

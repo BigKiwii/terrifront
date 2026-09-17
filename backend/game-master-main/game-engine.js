@@ -149,11 +149,13 @@ class GameEngine {
     if (this.phase !== 'ACTIVE') return null;
     if (this.winnerId) return null;
     this.tickCount += 1;
+    const hadActiveAttacks = this.expansionManager.attacks.size > 0;
     this.botManager?.tick(this.tickCount);
     const changes = this.expansionManager.tick();
     for (const landing of this.boatManager.tick()) changes.push(landing);
     this.updateWinner();
     const economyTick = this.tickCount % ECONOMY_TICKS_PER_SECOND === 0;
+    const attacksEnded = hadActiveAttacks && this.expansionManager.attacks.size === 0;
     if (economyTick) {
       this.economyTickCount += 1;
       this.collectIncome();
@@ -166,10 +168,11 @@ class GameEngine {
       changes.length === 0 &&
       !economyTick &&
       this.boatManager.boats.size === 0 &&
-      this.expansionManager.attacks.size === 0
+      this.expansionManager.attacks.size === 0 &&
+      !attacksEnded
     ) return null;
 
-    return this.getTickState(changes, economyTick);
+    return this.getTickState(changes, economyTick, attacksEnded);
   }
 
   requestExpansion(playerId, position, power = 1000) {
@@ -283,7 +286,7 @@ class GameEngine {
     };
   }
 
-  getTickState(changes, economyTick = false) {
+  getTickState(changes, economyTick = false, attacksEnded = false) {
     // Only iterate players when something could have made them dirty:
     // tile changes (captures alter territorySize), economy ticks (troops change),
     // or a winner being decided this tick (flags change).
@@ -331,7 +334,8 @@ class GameEngine {
       (players === null || players.length === 0) &&
       !this.winnerId &&
       !hasBoats &&
-      !hasAttacks
+      !hasAttacks &&
+      !attacksEnded
     ) return null;
 
     // serialize() and getActiveAttacks() only run when we know a packet is
