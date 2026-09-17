@@ -4,9 +4,6 @@ const path = require('path');
 const root = path.resolve(__dirname, '..');
 const frontend = path.join(root, 'frontend');
 const shared = path.join(root, 'shared');
-const mapPath = path.join(root, 'map', 'europ-asia-map.webp');
-const terrainPath = path.join(root, 'map', 'map.bin');
-const expansionTimesPath = path.join(root, 'map', 'expansion-times.bin');
 const manifestPath = path.join(root, 'map', 'manifest.json');
 const outputPath = path.join(root, 'dist', 'terrifront.html');
 
@@ -23,9 +20,8 @@ const gameUI = fs.readFileSync(path.join(frontend, 'gameUI.js'), 'utf8');
 const offlineCoordinator = fs.readFileSync(path.join(frontend, 'offline-coordinator.js'), 'utf8');
 const offlineWorker = fs.readFileSync(path.join(frontend, 'offline-worker.js'), 'utf8');
 const index = fs.readFileSync(path.join(frontend, 'index.js'), 'utf8');
-const map = fs.readFileSync(mapPath).toString('base64');
-const terrain = fs.existsSync(terrainPath) ? fs.readFileSync(terrainPath).toString('base64') : '';
-const expansionTimes = fs.existsSync(expansionTimesPath) ? fs.readFileSync(expansionTimesPath).toString('base64') : '';
+const terrain = fs.readFileSync(path.join(root, 'map', 'map.bin')).toString('base64');
+const expansionTimes = fs.readFileSync(path.join(root, 'map', 'expansion-times.bin')).toString('base64');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
 function resolveModule(request, parentId) {
@@ -63,11 +59,12 @@ function buildOfflineLogicBundle() {
 const offlineLogicBundle = buildOfflineLogicBundle();
 const workerOutputPath = path.join(root, 'dist', 'offline-worker.js');
 const offlineWorkerSource = `${offlineLogicBundle}${offlineWorker}`;
-const embeddedMapData = `<script>window.TerriEmbeddedTerrain='${terrain}';window.TerriEmbeddedExpansionTimes='${expansionTimes}';window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='/dist/offline-worker.js';window.TerriOfflineWorkerSource=${JSON.stringify(offlineWorkerSource)};</script>`;
+const workerSourceOutputPath = path.join(root, 'dist', 'offline-worker-source.js');
+const embeddedMapData = `<script>window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='/dist/offline-worker.js';</script><script src="offline-worker-source.js"></script>`;
 
 const output = html
   .replace('<script src="../shared/binary-protocol.js"></script>', `${embeddedMapData}<script src="../shared/binary-protocol.js"></script>`)
-  .replace('<link rel="stylesheet" href="index.css">', `<style>${css.replace("url('../map/europ-asia-map.webp')", `url('data:image/webp;base64,${map}')`)}</style>`)
+  .replace('<link rel="stylesheet" href="index.css">', `<style>${css.replace("url('../map/europ-asia-map.webp')", "url('../map/europ-asia-map.webp')")}</style>`)
   .replace('<script src="../shared/binary-protocol.js"></script>', `<script>${binaryProtocol}</script>`)
   .replace('<script src="communicator.js"></script>', `<script>${communicator}</script>`)
   .replace('<script src="game-ui/webgl-renderer.js"></script>', `<script>${webglRenderer}</script>`)
@@ -76,10 +73,11 @@ const output = html
   .replace('<script src="game-ui/color-utils.js"></script>', `<script>${colorUtils}</script>`)
   .replace('<script src="game-ui/game-store.js"></script>', `<script>${gameStore}</script>`)
   .replace('<script src="offline-coordinator.js"></script>', `<script>${offlineLogicBundle}${offlineCoordinator}</script>`)
-  .replace('<script src="gameUI.js"></script>', `<script>${gameUI.replace("'../map/europ-asia-map.webp'", `'data:image/webp;base64,${map}'`)}</script>`)
+  .replace('<script src="gameUI.js"></script>', `<script>${gameUI}</script>`)
   .replace('<script src="index.js"></script>', `<script>${index}</script>`);
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 fs.writeFileSync(outputPath, output);
 fs.writeFileSync(workerOutputPath, offlineWorkerSource);
+fs.writeFileSync(workerSourceOutputPath, `window.TerriEmbeddedTerrain='${terrain}';window.TerriEmbeddedExpansionTimes='${expansionTimes}';window.TerriOfflineWorkerSource=${JSON.stringify(offlineWorkerSource)};`);
 console.log(`Built ${path.relative(root, outputPath)}`);

@@ -83,10 +83,11 @@
       worker.postMessage({
         type: 'START',
         playerName,
-        terrain: window.TerriEmbeddedTerrain,
-        expansionTimes: window.TerriEmbeddedExpansionTimes,
         width: window.TerriMapWidth,
-        height: window.TerriMapHeight
+        height: window.TerriMapHeight,
+        assetBaseUrl: window.location.protocol === 'file:' ? 'http://localhost:8080' : window.location.origin,
+        terrain: window.location.protocol === 'file:' ? window.TerriEmbeddedTerrain : null,
+        expansionTimes: window.location.protocol === 'file:' ? window.TerriEmbeddedExpansionTimes : null
       });
     });
   }

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const zlib = require('zlib');
 const WebSocket = require('ws');
 const {
   OP,
@@ -20,11 +21,18 @@ const WatchDog = require('./watchdog/watchdog');
 const port = Number(process.env.PORT || 8080);
 const root = path.resolve(__dirname, '..');
 const fileCache = new Map();
+const gzipCache = new Map();
+
+function isCompressible(filePath) {
+  return /\.(html|js|css|json)$/.test(filePath);
+}
 
 function cacheStaticFile(filePath) {
   try {
     const content = fs.readFileSync(filePath);
-    fileCache.set(path.relative(root, filePath).replace(/\\/g, '/'), content);
+    const cacheKey = path.relative(root, filePath).replace(/\\/g, '/');
+    fileCache.set(cacheKey, content);
+    if (isCompressible(filePath)) gzipCache.set(cacheKey, zlib.gzipSync(content, { level: 6 }));
     return content;
   } catch {
     return null;
@@ -44,7 +52,9 @@ const staticServer = http.createServer((request, response) => {
   let payload = fileCache.get(requestedPath.replace(/^\//, ''));
   if (!payload && fs.existsSync(filePath)) {
     payload = fs.readFileSync(filePath);
-    fileCache.set(requestedPath.replace(/^\//, ''), payload);
+    const cacheKey = requestedPath.replace(/^\//, '');
+    fileCache.set(cacheKey, payload);
+    if (isCompressible(filePath)) gzipCache.set(cacheKey, zlib.gzipSync(payload, { level: 6 }));
   }
 
   if (!payload) {
@@ -55,16 +65,25 @@ const staticServer = http.createServer((request, response) => {
 
   const contentType = filePath.endsWith('.html') ? 'text/html; charset=utf-8'
     : filePath.endsWith('.js') ? 'application/javascript; charset=utf-8'
+    : filePath.endsWith('.webp') ? 'image/webp'
     : filePath.endsWith('.bin') ? 'application/octet-stream'
       : filePath.endsWith('.json') ? 'application/json; charset=utf-8' : 'application/octet-stream';
-  const cacheControl = filePath.endsWith('.html') || filePath.endsWith('.bin')
+  const cacheControl = filePath.endsWith('.html')
     ? 'no-cache, no-store, must-revalidate'
     : 'public, max-age=31536000, immutable';
-  response.writeHead(200, {
+  const cacheKey = requestedPath.replace(/^\//, '');
+  const acceptsGzip = isCompressible(filePath) && /\bgzip\b/.test(request.headers['accept-encoding'] || '');
+  const responseHeaders = {
     'Content-Type': contentType,
     'Cache-Control': cacheControl,
     'Access-Control-Allow-Origin': '*'
-  });
+  };
+  if (acceptsGzip) {
+    responseHeaders['Content-Encoding'] = 'gzip';
+    responseHeaders.Vary = 'Accept-Encoding';
+    payload = gzipCache.get(cacheKey) || zlib.gzipSync(payload, { level: 6 });
+  }
+  response.writeHead(200, responseHeaders);
   response.end(payload);
 });
 const server = new WebSocket.Server({ server: staticServer, maxPayload: 64 * 1024 });
@@ -126,6 +145,7 @@ lobbyManager.start();
 const STATIC_FILES = [
   '/dist/terrifront.html',
   '/dist/offline-worker.js',
+  '/dist/offline-worker-source.js',
   '/map/europ-asia-map.webp',
   '/map/map.bin',
   '/map/expansion-times.bin'

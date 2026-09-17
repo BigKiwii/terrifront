@@ -31,6 +31,12 @@
     spawnHandle = null;
   }
 
+  async function loadBytes(url) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Unable to load offline map asset ${url}: ${response.status}`);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
   function mapData(playerName, width, height) {
     return {
       gameId: OFFLINE_GAME_ID,
@@ -67,12 +73,12 @@
 
   async function start(message) {
     clearTimers();
-    const map = logic.createMap(
-      decodeBytes(message.terrain),
-      message.width,
-      message.height,
-      decodeBytes(message.expansionTimes)
-    );
+    const assetBaseUrl = message.assetBaseUrl || self.location.origin;
+    const terrain = message.terrain ? decodeBytes(message.terrain) : await loadBytes(`${assetBaseUrl}/map/map.bin`);
+    const expansionTimes = message.expansionTimes
+      ? decodeBytes(message.expansionTimes)
+      : await loadBytes(`${assetBaseUrl}/map/expansion-times.bin`);
+    const map = logic.createMap(terrain, message.width, message.height, expansionTimes);
     engine = new logic.GameEngine(OFFLINE_GAME_ID, map);
     await engine.addPlayer(message.playerName, HUMAN_ID, false);
     const botCount = Math.max(0, logic.BOT_COUNT - 1);
