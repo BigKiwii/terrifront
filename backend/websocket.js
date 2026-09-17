@@ -41,7 +41,12 @@ function cacheStaticFile(filePath) {
 
 const staticServer = http.createServer((request, response) => {
   const requestUrl = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
-  const requestedPath = requestUrl.pathname === '/' ? '/dist/terrifront.html' : requestUrl.pathname;
+  const aliases = {
+    '/terrifront.html': '/dist/terrifront.html',
+    '/offline-worker.js': '/dist/offline-worker.js',
+    '/offline-worker-source.js': '/dist/offline-worker-source.js'
+  };
+  const requestedPath = aliases[requestUrl.pathname] || (requestUrl.pathname === '/' ? '/dist/terrifront.html' : requestUrl.pathname);
   const filePath = path.resolve(root, `.${requestedPath}`);
   if (!filePath.startsWith(root)) {
     response.writeHead(404, { 'Cache-Control': 'no-store' });

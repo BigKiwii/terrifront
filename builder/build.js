@@ -60,7 +60,7 @@ const offlineLogicBundle = buildOfflineLogicBundle();
 const workerOutputPath = path.join(root, 'dist', 'offline-worker.js');
 const offlineWorkerSource = `${offlineLogicBundle}${offlineWorker}`;
 const workerSourceOutputPath = path.join(root, 'dist', 'offline-worker-source.js');
-const embeddedMapData = `<script>window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='/dist/offline-worker.js';</script><script src="offline-worker-source.js"></script>`;
+const embeddedMapData = `<script>window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='offline-worker.js';</script><script src="offline-worker-source.js"></script>`;
 
 const output = html
   .replace('<script src="../shared/binary-protocol.js"></script>', `${embeddedMapData}<script src="../shared/binary-protocol.js"></script>`)
