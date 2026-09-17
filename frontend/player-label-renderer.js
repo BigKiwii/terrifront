@@ -4,6 +4,11 @@
   let cachedGameData = null;
   let cachedTerritoryVersion = -1;
   let cachedSquares = new Map();
+  // largestOwnedSquares scans every map cell (~600k iterations). We decouple
+  // this from the per-draw territoryVersion check and throttle it to at most
+  // once every 2 seconds so it never hitches the render loop.
+  let squareScanAt = -Infinity;
+  const SQUARE_SCAN_INTERVAL_MS = 2000;
   let labelCanvas = null;
   let labelContext = null;
   let mapCanvas = null;
@@ -109,10 +114,16 @@
   function resolveLabelLayout(gameData, territoryVersion) {
     const width = gameData.map.width;
     const height = gameData.map.height;
-    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion) {
+    const now = performance.now();
+    const territoryChanged = gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion;
+    // Only run the full O(width×height) scan when territory has changed AND
+    // at least SQUARE_SCAN_INTERVAL_MS have passed since the last scan.
+    // This prevents a ~5-10ms hitch every 500ms (the label draw interval).
+    if (territoryChanged && now - squareScanAt >= SQUARE_SCAN_INTERVAL_MS) {
       cachedSquares = largestOwnedSquares(gameData.owners, width, height);
       cachedGameData = gameData;
       cachedTerritoryVersion = territoryVersion;
+      squareScanAt = now;
     }
     if (!mapBounds) mapBounds = mapCanvas.getBoundingClientRect();
     const scaleX = mapBounds.width / width;
@@ -166,7 +177,14 @@
     };
 
     const entries = resolveLabelLayout(gameData, territoryVersion);
-    const stateChanged = !lastDrawState || JSON.stringify(lastDrawState) !== JSON.stringify(nextState);
+    // Compare primitive fields directly — avoids JSON.stringify on every draw.
+    const stateChanged = !lastDrawState ||
+      lastDrawState.version !== nextState.version ||
+      lastDrawState.left !== nextState.left ||
+      lastDrawState.top !== nextState.top ||
+      lastDrawState.width !== nextState.width ||
+      lastDrawState.height !== nextState.height ||
+      lastDrawState.zoom !== nextState.zoom;
     lastDrawState = nextState;
 
     if (!stateChanged && entries.length === 0 && labelContext.canvas.width > 0) {

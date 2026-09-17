@@ -165,12 +165,27 @@
     lastPacketAt = 0;
   }
 
+  // Decode a flat Int32Array [pos0, owner0, pos1, owner1, ...] sent from the
+  // offline worker via a zero-copy transferable, back into the {position, owner}
+  // pairs that the rest of the pipeline expects.
+  // When changesBuf is absent (multiplayer WebSocket path) this is a no-op.
+  function decodeChangesBuf(data) {
+    if (!data.changesBuf) return data.changes || [];
+    const buf = data.changesBuf instanceof Int32Array
+      ? data.changesBuf
+      : new Int32Array(data.changesBuf);
+    const changes = new Array(buf.length / 2);
+    for (let i = 0; i < changes.length; i += 1) {
+      changes[i] = { position: buf[i * 2], owner: buf[i * 2 + 1] };
+    }
+    return changes;
+  }
+
   function queueChanges(changes) {
     if (!changes?.length) return;
     pendingChanges.push(...changes);
     const remaining = pendingChanges.length - pendingHead;
     drainRate = remaining / Math.max(16, packetIntervalMs);
-    drainCarry = 0;
   }
 
   function drainPendingChanges(deltaMs) {
@@ -1355,10 +1370,11 @@
         if (!selectedColor || selectedColor === '#8b9298') selectedColor = playerColors.get(localOwnerId) || '#69c878';
       }
       updateWebglPalette();
-      if (data.changes?.length) {
-        for (const change of data.changes) gameData.owners[change.position] = change.owner;
-        updateWebglOwners(data.changes);
-        updateTerritoryLayer(data.changes);
+      const spawnChanges = decodeChangesBuf(data);
+      if (spawnChanges.length) {
+        for (const change of spawnChanges) gameData.owners[change.position] = change.owner;
+        updateWebglOwners(spawnChanges);
+        updateTerritoryLayer(spawnChanges);
         territoryVersion += 1;
         renderState.labelsDirty = true;
       }
@@ -1440,8 +1456,9 @@
         gameData.players = data.players;
         rebuildPlayerMap();
         data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
-        for (const change of data.changes || []) gameData.owners[change.position] = change.owner;
-        updateWebglOwners(data.changes);
+        const activeChanges = decodeChangesBuf(data);
+        for (const change of activeChanges) gameData.owners[change.position] = change.owner;
+        updateWebglOwners(activeChanges);
         updateWebglPalette();
         rebuildTerritoryLayer();
         const player = data.players.find((item) => item.playerId === localPlayerId);
@@ -1473,7 +1490,7 @@
       boats.splice(0, boats.length, ...(data.boats || []));
       updateActiveAttacks(data.activeAttacks || []);
       if (hadBoats || boats.length) invalidateDynamic();
-      queueChanges(data.changes);
+      queueChanges(decodeChangesBuf(data));
       let leaderboardDirty = false;
       if (!playerMap.size && gameData?.players?.length) rebuildPlayerMap();
       for (const player of data.players || []) {

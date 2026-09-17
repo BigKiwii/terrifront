@@ -35,10 +35,10 @@
         TerriGameUI.confirmSpawn(message.payload);
         break;
       case 'ACTIVE_GAME':
-        TerriGameUI.startActiveGame(message.payload);
+        TerriGameUI.startActiveGame({ ...message.payload, changesBuf: message.changesBuf });
         break;
       case 'UPDATE':
-        TerriGameUI.applyGameUpdate(message.payload);
+        TerriGameUI.applyGameUpdate({ ...message.payload, changesBuf: message.changesBuf });
         break;
       case 'EXPANSION_REJECTED':
       case 'BOAT_REJECTED':

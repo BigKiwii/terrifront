@@ -16,12 +16,29 @@
     return bytes;
   }
 
-  function ownerChanges(owners) {
-    const changes = [];
-    for (let position = 0; position < owners.length; position += 1) {
-      if (owners[position] !== 0) changes.push({ position, owner: owners[position] });
+  // Encode all non-zero owners as a flat Int32Array: [pos0, owner0, pos1, owner1, ...]
+  // postMessage with a transferable ArrayBuffer is zero-copy — no structured-clone
+  // overhead of serializing hundreds of {position, owner} plain objects.
+  function encodeChanges(owners) {
+    let count = 0;
+    for (let i = 0; i < owners.length; i += 1) { if (owners[i] !== 0) count += 1; }
+    const buf = new Int32Array(count * 2);
+    let offset = 0;
+    for (let i = 0; i < owners.length; i += 1) {
+      if (owners[i] !== 0) { buf[offset++] = i; buf[offset++] = owners[i]; }
     }
-    return changes;
+    return buf;
+  }
+
+  // Encode a sparse changes array into a transferable flat Int32Array.
+  function encodeChangesList(changes) {
+    if (!changes || changes.length === 0) return null;
+    const buf = new Int32Array(changes.length * 2);
+    for (let i = 0; i < changes.length; i += 1) {
+      buf[i * 2] = changes[i].position;
+      buf[i * 2 + 1] = changes[i].owner;
+    }
+    return buf;
   }
 
   function clearTimers() {
@@ -55,7 +72,9 @@
 
   function currentState() {
     const state = engine.getState();
-    state.changes = ownerChanges(state.owners);
+    // Encode as transferable flat buffer; decoded on the main thread.
+    state.changesBuf = encodeChanges(state.owners);
+    state.changes = null; // don't send the full owners array or object-array changes
     return state;
   }
 
@@ -63,11 +82,24 @@
     if (!engine || engine.phase !== 'SPAWNING') return;
     const state = engine.finalizeSpawnPhase();
     if (!state) return;
-    state.changes = ownerChanges(state.owners);
-    self.postMessage({ type: 'ACTIVE_GAME', payload: state });
+    const changesBuf = encodeChanges(state.owners);
+    state.changes = null;
+    state.owners = null; // don't transfer the full owners Int32Array — it's huge
+    // Transfer the changesBuf so the main thread gets it zero-copy.
+    self.postMessage({ type: 'ACTIVE_GAME', payload: state, changesBuf }, [changesBuf.buffer]);
+
     tickHandle = setInterval(() => {
       const update = engine.tick();
-      if (update) self.postMessage({ type: 'UPDATE', payload: update });
+      if (!update) return;
+      // Encode tile changes as a transferable flat Int32Array.
+      // The update.changes array is already a sparse list of {position, owner}.
+      const buf = encodeChangesList(update.changes);
+      update.changes = null; // drop the object array — main thread reads buf instead
+      if (buf) {
+        self.postMessage({ type: 'UPDATE', payload: update, changesBuf: buf }, [buf.buffer]);
+      } else {
+        self.postMessage({ type: 'UPDATE', payload: update, changesBuf: null });
+      }
     }, 50);
   }
 
@@ -94,6 +126,7 @@
     }
 
     const state = currentState();
+    const changesBuf = state.changesBuf; // flat Int32Array from encodeChanges
     self.postMessage({
       type: 'START_READY',
       payload: {
@@ -104,10 +137,10 @@
           durationMs: SPAWN_DURATION_MS,
           spawnPoints: spawnPhase.spawnPoints,
           players: state.players,
-          changes: state.changes
+          changesBuf // decoded on main thread; replaces changes object-array
         }
       }
-    });
+    }, changesBuf ? [changesBuf.buffer] : []);
     spawnHandle = setTimeout(finalizeSpawn, SPAWN_DURATION_MS);
   }
 
