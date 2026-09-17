@@ -21,12 +21,12 @@ const colorUtils = fs.readFileSync(path.join(frontend, 'game-ui', 'color-utils.j
 const gameStore = fs.readFileSync(path.join(frontend, 'game-ui', 'game-store.js'), 'utf8');
 const gameUI = fs.readFileSync(path.join(frontend, 'gameUI.js'), 'utf8');
 const offlineCoordinator = fs.readFileSync(path.join(frontend, 'offline-coordinator.js'), 'utf8');
+const offlineWorker = fs.readFileSync(path.join(frontend, 'offline-worker.js'), 'utf8');
 const index = fs.readFileSync(path.join(frontend, 'index.js'), 'utf8');
 const map = fs.readFileSync(mapPath).toString('base64');
 const terrain = fs.existsSync(terrainPath) ? fs.readFileSync(terrainPath).toString('base64') : '';
 const expansionTimes = fs.existsSync(expansionTimesPath) ? fs.readFileSync(expansionTimesPath).toString('base64') : '';
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-const embeddedMapData = `<script>window.TerriEmbeddedTerrain='${terrain}';window.TerriEmbeddedExpansionTimes='${expansionTimes}';window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};</script>`;
 
 function resolveModule(request, parentId) {
   if (!request.startsWith('.')) return null;
@@ -57,10 +57,13 @@ function buildOfflineLogicBundle() {
   const definitions = [...modules.entries()]
     .map(([id, source]) => `${JSON.stringify(id)}: function(require, module, exports) {\n${source}\n}`)
     .join(',\n');
-  return `(function(){const modules={${definitions}};const cache={};function load(id){if(cache[id])return cache[id].exports;const definition=modules[id];if(!definition)throw new Error('Offline module not found: '+id);const module={exports:{}};cache[id]=module;definition(load,module,module.exports);return module.exports;}const mapGenerator=load('backend/game-logic/map-generator.js');const rules=load('shared/game-rules.js');window.TerriOfflineLogic={GameEngine:load('backend/game-master-main/game-engine.js'),createMap:mapGenerator.createMap,BOT_COUNT:rules.BOT_COUNT};}());`;
+  return `(function(){const modules={${definitions}};const cache={};function load(id){if(cache[id])return cache[id].exports;const definition=modules[id];if(!definition)throw new Error('Offline module not found: '+id);const module={exports:{}};cache[id]=module;definition(load,module,module.exports);return module.exports;}const mapGenerator=load('backend/game-logic/map-generator.js');const rules=load('shared/game-rules.js');globalThis.TerriOfflineLogic={GameEngine:load('backend/game-master-main/game-engine.js'),createMap:mapGenerator.createMap,BOT_COUNT:rules.BOT_COUNT};}());`;
 }
 
 const offlineLogicBundle = buildOfflineLogicBundle();
+const workerOutputPath = path.join(root, 'dist', 'offline-worker.js');
+const offlineWorkerSource = `${offlineLogicBundle}${offlineWorker}`;
+const embeddedMapData = `<script>window.TerriEmbeddedTerrain='${terrain}';window.TerriEmbeddedExpansionTimes='${expansionTimes}';window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='/dist/offline-worker.js';window.TerriOfflineWorkerSource=${JSON.stringify(offlineWorkerSource)};</script>`;
 
 const output = html
   .replace('<script src="../shared/binary-protocol.js"></script>', `${embeddedMapData}<script src="../shared/binary-protocol.js"></script>`)
@@ -78,4 +81,5 @@ const output = html
 
 fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 fs.writeFileSync(outputPath, output);
+fs.writeFileSync(workerOutputPath, offlineWorkerSource);
 console.log(`Built ${path.relative(root, outputPath)}`);

@@ -1,127 +1,106 @@
 (function () {
   'use strict';
 
-  const logic = window.TerriOfflineLogic;
   const OFFLINE_GAME_ID = 'offline-game';
   const HUMAN_ID = 'player-1';
-  const SPAWN_DURATION_MS = 10000;
-  let engine = null;
-  let tickHandle = null;
-  let spawnHandle = null;
+  let worker = null;
+  let workerObjectUrl = null;
   let running = false;
 
-  function decodeBytes(encoded) {
-    const binary = atob(encoded || '');
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    return bytes;
+  let startResolve = null;
+  let startReject = null;
+
+  function stop() {
+    if (worker) worker.terminate();
+    if (workerObjectUrl) window.URL.revokeObjectURL(workerObjectUrl);
+    worker = null;
+    workerObjectUrl = null;
+    startResolve = null;
+    startReject = null;
+    running = false;
   }
 
-  function ownerChanges(owners) {
-    const changes = [];
-    for (let position = 0; position < owners.length; position += 1) {
-      if (owners[position] !== 0) changes.push({ position, owner: owners[position] });
+  function handleWorkerMessage(event) {
+    const message = event.data || {};
+    switch (message.type) {
+      case 'START_READY':
+        running = true;
+        TerriGameUI.start(message.payload.map);
+        TerriGameUI.beginSpawnPhase(message.payload.spawnPhase);
+        startResolve?.();
+        startResolve = null;
+        startReject = null;
+        break;
+      case 'SPAWN_CONFIRMED':
+        TerriGameUI.confirmSpawn(message.payload);
+        break;
+      case 'ACTIVE_GAME':
+        TerriGameUI.startActiveGame(message.payload);
+        break;
+      case 'UPDATE':
+        TerriGameUI.applyGameUpdate(message.payload);
+        break;
+      case 'EXPANSION_REJECTED':
+      case 'BOAT_REJECTED':
+        TerriGameUI.rejectExpansion(message.payload);
+        break;
+      case 'ERROR':
+        startReject?.(new Error(message.message || 'Offline game worker failed'));
+        startResolve = null;
+        startReject = null;
+        console.error('Offline game worker failed:', message.message);
+        break;
+      default:
+        break;
     }
-    return changes;
   }
 
-  function clearTimers() {
-    if (tickHandle !== null) window.clearInterval(tickHandle);
-    if (spawnHandle !== null) window.clearTimeout(spawnHandle);
-    tickHandle = null;
-    spawnHandle = null;
-  }
-
-  function mapData(playerName) {
-    return {
-      gameId: OFFLINE_GAME_ID,
-      playerId: HUMAN_ID,
-      playerName,
-      map: {
-        mapId: 'europa-asia-01',
-        width: window.TerriMapWidth,
-        height: window.TerriMapHeight,
-        backgroundAsset: 'map/europ-asia-map.webp',
-        terrainUrl: '/map/map.bin',
-        expansionTimesUrl: '/map/expansion-times.bin'
-      }
-    };
-  }
-
-  function currentState() {
-    const state = engine.getState();
-    state.changes = ownerChanges(state.owners);
-    return state;
-  }
-
-  function finalizeSpawn() {
-    if (!engine || engine.phase !== 'SPAWNING') return;
-    const state = engine.finalizeSpawnPhase();
-    if (!state) return;
-    state.changes = ownerChanges(state.owners);
-    TerriGameUI.startActiveGame(state);
-    tickHandle = window.setInterval(() => {
-      const update = engine.tick();
-      if (update) TerriGameUI.applyGameUpdate(update);
-    }, 50);
-  }
-
-  async function start(playerName) {
-    if (!logic || !window.TerriGameUI) throw new Error('Offline game logic is unavailable');
+  function start(playerName) {
+    if (!window.Worker) return Promise.reject(new Error('Offline game workers are unavailable'));
     stop();
-    const terrain = decodeBytes(window.TerriEmbeddedTerrain);
-    const expansionTimes = decodeBytes(window.TerriEmbeddedExpansionTimes);
-    const map = logic.createMap(terrain, window.TerriMapWidth, window.TerriMapHeight, expansionTimes);
-    engine = new logic.GameEngine(OFFLINE_GAME_ID, map);
-    await engine.addPlayer(playerName, HUMAN_ID, false);
-    const botCount = Math.max(0, logic.BOT_COUNT - 1);
-    for (let index = 0; index < botCount; index += 1) {
-      await engine.addPlayer(`Bot ${String(index + 1).padStart(3, '0')}`, `player-${index + 2}`, true);
+    try {
+      let workerUrl = window.TerriOfflineWorkerUrl || '/dist/offline-worker.js';
+      if (window.location.protocol === 'file:') {
+        if (!window.TerriOfflineWorkerSource) throw new Error('Offline game worker source is unavailable');
+        workerObjectUrl = window.URL.createObjectURL(new Blob([window.TerriOfflineWorkerSource], { type: 'application/javascript' }));
+        workerUrl = workerObjectUrl;
+      }
+      worker = new Worker(workerUrl);
+    } catch (error) {
+      return Promise.reject(error);
     }
-
-    const spawnPhase = engine.startSpawnPhase(SPAWN_DURATION_MS);
-    for (const player of engine.players.values()) {
-      if (!player.isBot) continue;
-      const position = engine.spawnManager.randomPosition();
-      if (position !== null) engine.selectSpawn(player.playerId, position);
-    }
-
-    running = true;
-    TerriGameUI.start(mapData(playerName));
-    const state = currentState();
-    TerriGameUI.beginSpawnPhase({
-      playerId: HUMAN_ID,
-      deadline: Date.now() + SPAWN_DURATION_MS,
-      durationMs: SPAWN_DURATION_MS,
-      spawnPoints: spawnPhase.spawnPoints,
-      players: state.players,
-      changes: state.changes
+    worker.onmessage = handleWorkerMessage;
+    worker.onerror = (event) => {
+      const message = event.message || 'Offline game worker failed';
+      startReject?.(new Error(message));
+      startResolve = null;
+      startReject = null;
+      console.error(message);
+    };
+    return new Promise((resolve, reject) => {
+      startResolve = resolve;
+      startReject = reject;
+      worker.postMessage({
+        type: 'START',
+        playerName,
+        terrain: window.TerriEmbeddedTerrain,
+        expansionTimes: window.TerriEmbeddedExpansionTimes,
+        width: window.TerriMapWidth,
+        height: window.TerriMapHeight
+      });
     });
-    spawnHandle = window.setTimeout(finalizeSpawn, SPAWN_DURATION_MS);
   }
 
   function submitSpawn(payload) {
-    if (!engine || engine.phase !== 'SPAWNING') return;
-    const result = engine.submitSpawn(payload.playerId, payload.position);
-    if (result.accepted) TerriGameUI.confirmSpawn(result);
+    worker?.postMessage({ type: 'SPAWN', payload });
   }
 
   function requestExpansion(payload, power) {
-    if (!engine) return;
-    const result = engine.requestExpansion(payload.playerId, payload.position, power);
-    if (!result.accepted) TerriGameUI.rejectExpansion(result);
+    worker?.postMessage({ type: 'EXPAND', payload, power });
   }
 
   function requestBoat(payload, power) {
-    if (!engine) return;
-    const result = engine.requestBoat(payload.playerId, payload.position, power);
-    if (!result.accepted) TerriGameUI.rejectExpansion(result);
-  }
-
-  function stop() {
-    clearTimers();
-    engine = null;
-    running = false;
+    worker?.postMessage({ type: 'BOAT', payload, power });
   }
 
   window.TerriOfflineGame = { start, stop, submitSpawn, requestExpansion, requestBoat, isRunning: () => running };

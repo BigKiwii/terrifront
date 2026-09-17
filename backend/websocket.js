@@ -54,6 +54,7 @@ const staticServer = http.createServer((request, response) => {
   }
 
   const contentType = filePath.endsWith('.html') ? 'text/html; charset=utf-8'
+    : filePath.endsWith('.js') ? 'application/javascript; charset=utf-8'
     : filePath.endsWith('.bin') ? 'application/octet-stream'
       : filePath.endsWith('.json') ? 'application/json; charset=utf-8' : 'application/octet-stream';
   const cacheControl = filePath.endsWith('.html') || filePath.endsWith('.bin')
@@ -124,6 +125,7 @@ lobbyManager.start();
 
 const STATIC_FILES = [
   '/dist/terrifront.html',
+  '/dist/offline-worker.js',
   '/map/europ-asia-map.webp',
   '/map/map.bin',
   '/map/expansion-times.bin'

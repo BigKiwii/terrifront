@@ -45,7 +45,11 @@
   const sceneCanvas = document.createElement('canvas');
   const sceneContext = sceneCanvas.getContext('2d');
   const renderScale = 1;
-  TerriPlayerLabelRenderer.init(document.querySelector('#game-screen'), canvas);
+  try {
+    TerriPlayerLabelRenderer.init(document.querySelector('#game-screen'), canvas);
+  } catch (error) {
+    console.warn('Player label renderer unavailable:', error.message);
+  }
   let gameData = null;
   let zoom = 1;
   let panX = 0;

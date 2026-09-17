@@ -171,7 +171,8 @@ void main() {
     }
 
     function setOwners(owners) {
-      ownerData = Uint16Array.from(owners);
+      if (ownerData.length !== owners.length) ownerData = new Uint16Array(owners.length);
+      ownerData.set(owners);
       mapReady = ownerData.length === width * height;
       if (mapReady) uploadOwners();
     }
@@ -199,7 +200,7 @@ void main() {
         let start = positions[0];
         let end = start;
         for (let index = 1; index <= positions.length; index += 1) {
-          const next = positions[index];
+          const next = index < positions.length ? positions[index] : -1;
           if (next !== end + 1 && next !== end) {
             gl.texSubImage2D(gl.TEXTURE_2D, 0, start, y, end - start + 1, 1, gl.RED_INTEGER, gl.UNSIGNED_SHORT, ownerData.subarray(y * width + start, y * width + end + 1));
             start = next;
