@@ -5,9 +5,11 @@
   const OFFLINE_GAME_ID = 'offline-game';
   const HUMAN_ID = 'player-1';
   const SPAWN_DURATION_MS = 10000;
+  const TICK_MS = 50;
   let engine = null;
   let tickHandle = null;
   let spawnHandle = null;
+  let nextTickAt = 0;
 
   function decodeBytes(encoded) {
     const binary = atob(encoded || '');
@@ -46,6 +48,7 @@
     if (spawnHandle !== null) clearTimeout(spawnHandle);
     tickHandle = null;
     spawnHandle = null;
+    nextTickAt = 0;
   }
 
   async function loadBytes(url) {
@@ -87,20 +90,27 @@
     state.owners = null; // don't transfer the full owners Int32Array — it's huge
     // Transfer the changesBuf so the main thread gets it zero-copy.
     self.postMessage({ type: 'ACTIVE_GAME', payload: state, changesBuf }, [changesBuf.buffer]);
+    nextTickAt = Date.now() + TICK_MS;
+    scheduleTick();
+  }
 
-    tickHandle = setInterval(() => {
+  function scheduleTick() {
+    if (!engine) return;
+    tickHandle = setTimeout(() => {
+      if (!engine) return;
       const update = engine.tick();
-      if (!update) return;
-      // Encode tile changes as a transferable flat Int32Array.
-      // The update.changes array is already a sparse list of {position, owner}.
-      const buf = encodeChangesList(update.changes);
-      update.changes = null; // drop the object array — main thread reads buf instead
-      if (buf) {
-        self.postMessage({ type: 'UPDATE', payload: update, changesBuf: buf }, [buf.buffer]);
-      } else {
-        self.postMessage({ type: 'UPDATE', payload: update, changesBuf: null });
+      if (update) {
+        // Encode tile changes as a transferable flat Int32Array.
+        const buf = encodeChangesList(update.changes);
+        update.changes = null;
+        if (buf) self.postMessage({ type: 'UPDATE', payload: update, changesBuf: buf }, [buf.buffer]);
+        else self.postMessage({ type: 'UPDATE', payload: update, changesBuf: null });
       }
-    }, 50);
+      nextTickAt += TICK_MS;
+      const now = Date.now();
+      if (nextTickAt <= now) nextTickAt = now + TICK_MS;
+      scheduleTick();
+    }, Math.max(0, nextTickAt - Date.now()));
   }
 
   async function start(message) {

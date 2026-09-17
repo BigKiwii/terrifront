@@ -178,23 +178,29 @@ void main() {
     }
 
     function updateOwners(owners, changes) {
+      const changeCount = changes instanceof Int32Array ? changes.length / 2 : (changes?.length || 0);
       if (!mapReady) {
-        for (const change of changes || []) {
+        if (changes instanceof Int32Array) {
+          for (let index = 0; index < changes.length; index += 2) {
+            const position = changes[index];
+            if (position >= 0 && position < ownerData.length) ownerData[position] = changes[index + 1];
+          }
+        } else for (const change of changes || []) {
           if (Number.isInteger(change.position) && change.position >= 0 && change.position < ownerData.length) ownerData[change.position] = owners[change.position];
         }
         return;
       }
       const rows = new Map();
-      for (const change of changes || []) {
-        const position = change.position;
+      for (let index = 0; index < changeCount; index += 1) {
+        const position = changes instanceof Int32Array ? changes[index * 2] : changes[index].position;
         if (!Number.isInteger(position) || position < 0 || position >= ownerData.length) continue;
-        ownerData[position] = owners[position];
+        ownerData[position] = changes instanceof Int32Array ? changes[index * 2 + 1] : owners[position];
         const y = Math.floor(position / width);
         const x = position % width;
         if (!rows.has(y)) rows.set(y, []);
         rows.get(y).push(x);
       }
-      if (rows.size > 512 || (changes?.length || 0) > 2048) {
+      if (rows.size > 512 || changeCount > 2048) {
         uploadOwners();
         return;
       }

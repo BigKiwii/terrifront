@@ -87,7 +87,8 @@
   const LEADERBOARD_INTERVAL_MS = 250;
   const LABEL_UPDATE_INTERVAL_MS = 500;
   const PLAYER_FOCUS_ZOOM = 4;
-  let pendingChanges = [];
+  let pendingChanges = new Int32Array(0);
+  let pendingLength = 0;
   let pendingHead = 0;
   let drainRate = 0;
   let drainCarry = 0;
@@ -157,7 +158,8 @@
   }
 
   function resetInterpolation() {
-    pendingChanges = [];
+    pendingChanges = new Int32Array(0);
+    pendingLength = 0;
     pendingHead = 0;
     drainRate = 0;
     drainCarry = 0;
@@ -165,31 +167,54 @@
     lastPacketAt = 0;
   }
 
-  // Decode a flat Int32Array [pos0, owner0, pos1, owner1, ...] sent from the
-  // offline worker via a zero-copy transferable, back into the {position, owner}
-  // pairs that the rest of the pipeline expects.
-  // When changesBuf is absent (multiplayer WebSocket path) this is a no-op.
+  // Keep offline updates flat; only the multiplayer compatibility path needs a
+  // one-time conversion from its legacy object array.
   function decodeChangesBuf(data) {
-    if (!data.changesBuf) return data.changes || [];
-    const buf = data.changesBuf instanceof Int32Array
-      ? data.changesBuf
-      : new Int32Array(data.changesBuf);
-    const changes = new Array(buf.length / 2);
-    for (let i = 0; i < changes.length; i += 1) {
-      changes[i] = { position: buf[i * 2], owner: buf[i * 2 + 1] };
+    if (data.changesBuf) return data.changesBuf instanceof Int32Array ? data.changesBuf : new Int32Array(data.changesBuf);
+    const changes = data.changes || [];
+    if (changes instanceof Int32Array) return changes;
+    const buffer = new Int32Array(changes.length * 2);
+    for (let index = 0; index < changes.length; index += 1) {
+      buffer[index * 2] = changes[index].position;
+      buffer[index * 2 + 1] = changes[index].owner;
     }
-    return changes;
+    return buffer;
+  }
+
+  function forEachChange(changes, callback) {
+    if (changes instanceof Int32Array) {
+      for (let index = 0; index < changes.length; index += 2) callback(changes[index], changes[index + 1]);
+      return;
+    }
+    for (const change of changes || []) callback(change.position, change.owner);
   }
 
   function queueChanges(changes) {
     if (!changes?.length) return;
-    pendingChanges.push(...changes);
-    const remaining = pendingChanges.length - pendingHead;
+    const incoming = changes instanceof Int32Array ? changes : decodeChangesBuf({ changes });
+    const unread = pendingLength - pendingHead;
+    if (pendingChanges.length < unread + incoming.length) {
+      const next = new Int32Array(Math.max(unread + incoming.length, pendingChanges.length * 2, 1024));
+      if (unread) next.set(pendingChanges.subarray(pendingHead, pendingLength));
+      pendingChanges = next;
+      pendingLength = unread;
+      pendingHead = 0;
+    } else if (pendingHead > 0 && unread) {
+      pendingChanges.copyWithin(0, pendingHead, pendingLength);
+      pendingLength = unread;
+      pendingHead = 0;
+    } else if (unread === 0) {
+      pendingLength = 0;
+      pendingHead = 0;
+    }
+    pendingChanges.set(incoming, pendingLength);
+    pendingLength += incoming.length;
+    const remaining = (pendingLength - pendingHead) / 2;
     drainRate = remaining / Math.max(16, packetIntervalMs);
   }
 
   function drainPendingChanges(deltaMs) {
-    const remaining = pendingChanges.length - pendingHead;
+    const remaining = (pendingLength - pendingHead) / 2;
     if (remaining === 0) return;
     drainCarry += drainRate * deltaMs;
     let budget = Math.floor(drainCarry);
@@ -197,23 +222,28 @@
     drainCarry -= budget;
     if (remaining <= budget + 1) budget = remaining;
 
-    const applied = [];
-    while (pendingHead < pendingChanges.length && budget > 0) {
-      const change = pendingChanges[pendingHead++];
-      gameData.owners[change.position] = change.owner;
-      applied.push(change);
+    const applied = new Int32Array(Math.min(budget, remaining) * 2);
+    let appliedLength = 0;
+    while (pendingHead < pendingLength && budget > 0) {
+      const position = pendingChanges[pendingHead++];
+      const owner = pendingChanges[pendingHead++];
+      gameData.owners[position] = owner;
+      applied[appliedLength++] = position;
+      applied[appliedLength++] = owner;
       budget -= 1;
     }
-    if (pendingHead >= pendingChanges.length) {
-      pendingChanges = [];
+    if (pendingHead >= pendingLength) {
+      pendingLength = 0;
       pendingHead = 0;
-    } else if (pendingHead > 4096) {
-      pendingChanges = pendingChanges.slice(pendingHead);
+    } else if (pendingHead > 8192) {
+      pendingChanges.copyWithin(0, pendingHead, pendingLength);
+      pendingLength -= pendingHead;
       pendingHead = 0;
     }
-    if (applied.length) {
-      updateWebglOwners(applied);
-      updateTerritoryLayer(applied);
+    if (appliedLength) {
+      const appliedChanges = applied.subarray(0, appliedLength);
+      updateWebglOwners(appliedChanges);
+      updateTerritoryLayer(appliedChanges);
       territoryVersion += 1;
       renderState.labelsDirty = true;
     }
@@ -582,10 +612,10 @@
     if (webglRenderer) return;
     if (!territoryImageData) return;
     const affected = new Set();
-    for (const change of changes || []) {
-      affected.add(change.position);
-      for (const neighbor of mapNeighbors(change.position)) affected.add(neighbor);
-    }
+    forEachChange(changes, (position) => {
+      affected.add(position);
+      for (const neighbor of mapNeighbors(position)) affected.add(neighbor);
+    });
     for (const position of affected) {
       paintTerritoryTile(position);
       const x = position % gameData.map.width;
@@ -1387,7 +1417,7 @@
       updateWebglPalette();
       const spawnChanges = decodeChangesBuf(data);
       if (spawnChanges.length) {
-        for (const change of spawnChanges) gameData.owners[change.position] = change.owner;
+        forEachChange(spawnChanges, (position, owner) => { gameData.owners[position] = owner; });
         updateWebglOwners(spawnChanges);
         updateTerritoryLayer(spawnChanges);
         territoryVersion += 1;
@@ -1472,7 +1502,7 @@
         rebuildPlayerMap();
         data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
         const activeChanges = decodeChangesBuf(data);
-        for (const change of activeChanges) gameData.owners[change.position] = change.owner;
+        forEachChange(activeChanges, (position, owner) => { gameData.owners[position] = owner; });
         updateWebglOwners(activeChanges);
         updateWebglPalette();
         rebuildTerritoryLayer();
