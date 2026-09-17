@@ -37,7 +37,11 @@ class BotBrain {
       return false;
     }
 
-    if (this.neutralStrategy.hasActiveAttack(this.bot.playerId, tickCount)) {
+    const hasActiveNeutralAttack = this.neutralStrategy.hasActiveAttack(this.bot.playerId, tickCount);
+    if (hasActiveNeutralAttack && this.random() < 0.25) {
+      if (this.neighbourStrategy.execute(this.bot)) return true;
+    }
+    if (hasActiveNeutralAttack) {
       this.state = 'HUNGRY_FOR_NEUTRAL';
       return this.neutralStrategy.execute(this.bot, tickCount);
     }
@@ -49,7 +53,6 @@ class BotBrain {
     }
 
     this.state = 'ATTACK_NEIGHBOUR';
-    if (this.expansionManager.hasActivePlayerAttack(this.bot.playerId)) return false;
     if (this.neighbourStrategy.execute(this.bot)) return true;
     return this.boatStrategy.execute(this.bot);
   }

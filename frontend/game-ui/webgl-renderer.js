@@ -194,6 +194,10 @@ void main() {
         if (!rows.has(y)) rows.set(y, []);
         rows.get(y).push(x);
       }
+      if (rows.size > 512 || (changes?.length || 0) > 2048) {
+        uploadOwners();
+        return;
+      }
       gl.bindTexture(gl.TEXTURE_2D, ownersTexture);
       for (const [y, positions] of rows) {
         positions.sort((first, second) => first - second);

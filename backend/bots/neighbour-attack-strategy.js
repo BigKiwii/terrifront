@@ -5,10 +5,6 @@ class NeighbourAttackStrategy {
     this.expansionManager = expansionManager;
     this.players = players;
     this.random = random;
-    this.dropAttackChance = 5 + Math.floor(random() * 10);
-    this.targetSmallChance = Math.floor(random() * 100);
-    this.targetNonPlayerChance = Math.floor(random() * 100);
-    this.densityChoiceChance = Math.floor(random() * 20);
   }
 
   execute(bot) {
@@ -32,22 +28,20 @@ class NeighbourAttackStrategy {
     }
     if (targets.length === 0) return null;
 
-    if (this.random() * 100 < this.dropAttackChance) return null;
-
     let candidates = targets;
-    if (this.random() * 100 < this.targetSmallChance) {
+    if (this.random() * 100 < 45) {
       const smallTargets = targets.filter((target) =>
         this.territory.getTerritorySize(target.ownerId) < this.territory.getTerritorySize(bot.ownerId) * 0.1
       );
       if (smallTargets.length > 0) candidates = smallTargets;
     }
 
-    if (this.random() * 100 < this.targetNonPlayerChance) {
+    if (this.random() * 100 < 55) {
       const botTargets = candidates.filter((target) => this.players.get(`player-${target.ownerId}`)?.isBot);
       if (botTargets.length > 0) candidates = botTargets;
     }
 
-    if (this.random() * 100 < this.densityChoiceChance) {
+    if (this.random() * 100 < 20) {
       let lowestDensity = Infinity;
       let lowestTarget = candidates[0];
       for (const target of candidates) {

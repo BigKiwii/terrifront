@@ -18,7 +18,7 @@ class BotPlayer {
     this.nextIntervalTick = this.interval === null
       ? Infinity
       : this.triggerSeed < 3 ? Math.floor(random() * 5) : Math.floor(random() * this.triggerSeed);
-    this.cooldown = 1 + Math.floor(random() * 20);
+    this.cooldown = 1 + Math.floor(random() * 8);
     this.nextActionTick = 0;
     this.brain = new BotBrain(this, { ...dependencies, players: dependencies.players }, random);
   }
