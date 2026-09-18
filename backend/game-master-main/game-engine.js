@@ -5,6 +5,12 @@ const ExpansionManager = require('../game-logic/expansion-manager');
 const { BotManager } = require('../bots/bot-manager');
 const BoatManager = require('../game-logic/boat-manager');
 const {
+  createWasteland,
+  getNukeDuration,
+  applyNukeImpact,
+  getWastelandPositions
+} = require('../game-logic/nukes');
+const {
   ECONOMY_TICKS_PER_SECOND,
   BOT_COUNT,
   BOT_TROOP_INCOME_MULTIPLIER
@@ -26,10 +32,16 @@ class GameEngine {
     this.economyTickCount = 0;
     this.activeSince = null;
     this.winnerId = null;
+    this.wasteland = null;
+    this.pendingNukes = [];
   }
 
   async addPlayer(playerName, playerId = `player-${this.players.size + 1}`, isBot = false) {
     if (!this.map) this.map = cloneMap(await loadMap());
+    if (!this.wasteland) {
+      this.wasteland = createWasteland(this.map.cellCount);
+      this.map.wasteland = this.wasteland;
+    }
     if (!this.spawnManager) this.spawnManager = new SpawnManager(this.map);
     if (!this.territoryManager) this.territoryManager = new TerritoryManager(this.map);
     if (!this.expansionManager) this.expansionManager = new ExpansionManager(this.map, this.territoryManager, this.players);
@@ -152,7 +164,30 @@ class GameEngine {
     const hadActiveAttacks = this.expansionManager.attacks.size > 0;
     this.botManager?.tick(this.tickCount);
     const changes = this.expansionManager.tick();
+    const wastelandChanges = changes.wastelandChanges || [];
+    changes.wastelandChanges = undefined;
     for (const landing of this.boatManager.tick()) changes.push(landing);
+    const impactWastelandChanges = [];
+    if (this.pendingNukes.length) {
+      const pending = this.pendingNukes;
+      this.pendingNukes = [];
+      for (const nuke of pending) {
+        if (nuke.impactAt > now) {
+          this.pendingNukes.push(nuke);
+          continue;
+        }
+        const impact = applyNukeImpact({
+          map: this.map,
+          territory: this.territoryManager,
+          players: this.players,
+          wasteland: this.wasteland,
+          targetPosition: nuke.targetPosition
+        });
+        this.expansionManager.markAllFrontiersDirty();
+        changes.push(...impact.ownerChanges);
+        impactWastelandChanges.push(...impact.wastelandChanges);
+      }
+    }
     this.updateWinner();
     const economyTick = this.tickCount % ECONOMY_TICKS_PER_SECOND === 0;
     const attacksEnded = hadActiveAttacks && this.expansionManager.attacks.size === 0;
@@ -166,13 +201,15 @@ class GameEngine {
     // Skip getTickState entirely; all of its work would produce an empty packet.
     if (
       changes.length === 0 &&
+      wastelandChanges.length === 0 &&
+      impactWastelandChanges.length === 0 &&
       !economyTick &&
       this.boatManager.boats.size === 0 &&
       this.expansionManager.attacks.size === 0 &&
       !attacksEnded
     ) return null;
 
-    return this.getTickState(changes, economyTick, attacksEnded);
+    return this.getTickState(changes, economyTick, attacksEnded, wastelandChanges.concat(impactWastelandChanges));
   }
 
   requestExpansion(playerId, position, power = 1000) {
@@ -195,6 +232,19 @@ class GameEngine {
     const ownerId = Number(playerId.replace('player-', ''));
     if (this.map.owners[position] === ownerId) return { accepted: false, reason: 'ALREADY_OWNED' };
     return this.boatManager.launch(playerId, power, position);
+  }
+
+  requestNuke(playerId, targetPosition) {
+    if (this.phase !== 'ACTIVE') return { accepted: false, reason: 'GAME_NOT_ACTIVE' };
+    if (this.winnerId) return { accepted: false, reason: 'GAME_FINISHED' };
+    if (!Number.isInteger(targetPosition) || targetPosition < 0 || targetPosition >= this.map.cellCount) {
+      return { accepted: false, reason: 'INVALID_POSITION' };
+    }
+    const player = this.players.get(playerId);
+    if (!player || !Number.isInteger(player.spawnPosition)) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
+    const durationMs = getNukeDuration(player.spawnPosition, targetPosition, this.map);
+    this.pendingNukes.push({ targetPosition, impactAt: Date.now() + durationMs });
+    return { accepted: true, playerId, startPosition: player.spawnPosition, targetPosition, durationMs };
   }
 
   cancelExpansion(playerId) {
@@ -257,6 +307,7 @@ class GameEngine {
       tickCount: this.tickCount,
       winnerId: this.winnerId,
       activeAttacks: this.expansionManager.getActiveAttacks(),
+      wastelandChanges: getWastelandPositions(this.wasteland || new Uint8Array(0)),
     };
   }
 
@@ -286,11 +337,11 @@ class GameEngine {
     };
   }
 
-  getTickState(changes, economyTick = false, attacksEnded = false) {
+  getTickState(changes, economyTick = false, attacksEnded = false, wastelandChanges = []) {
     // Only iterate players when something could have made them dirty:
     // tile changes (captures alter territorySize), economy ticks (troops change),
     // or a winner being decided this tick (flags change).
-    const playersDirty = changes.length > 0 || economyTick || this.winnerId !== null;
+    const playersDirty = changes.length > 0 || wastelandChanges.length > 0 || economyTick || this.winnerId !== null;
     let players = null;
 
     if (playersDirty) {
@@ -331,6 +382,7 @@ class GameEngine {
     const hasAttacks = this.expansionManager.attacks.size > 0;
     if (
       changes.length === 0 &&
+      wastelandChanges.length === 0 &&
       (players === null || players.length === 0) &&
       !this.winnerId &&
       !hasBoats &&
@@ -351,7 +403,8 @@ class GameEngine {
       players: players ?? [],
       boats,
       activeAttacks,
-      winnerId: this.winnerId
+      winnerId: this.winnerId,
+      wastelandChanges
     };
   }
 }

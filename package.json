@@ -7,7 +7,8 @@
     "start": "node backend/websocket.js",
     "prebuild": "npm run bake-map",
     "build": "node builder/build.js",
-    "bake-map": "node scripts/bake-map.js"
+    "bake-map": "node scripts/bake-map.js",
+    "test": "node --test tests/nukes.test.js"
   },
   "dependencies": {
     "sharp": "^0.35.4",

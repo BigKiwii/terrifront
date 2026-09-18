@@ -108,6 +108,10 @@
     TerriGameUI.applyGameUpdate(message.payload);
   });
 
+  TerriCommunicator.on(OP.NUKE_LAUNCHED, function (message) {
+    TerriGameUI.startNukeAnimation(message.payload);
+  });
+
   TerriCommunicator.on(OP.EXPANSION_REJECTED, function (message) {
     TerriGameUI.rejectExpansion(message.payload);
   });
@@ -140,6 +144,14 @@
       return;
     }
     TerriCommunicator.send(PROTOCOL.encodeBoatRequest(payload.playerId, payload.position, power));
+  });
+
+  TerriGameUI.onNukeLaunch(function (payload) {
+    if (TerriOfflineGame.isRunning()) {
+      TerriOfflineGame.requestNuke(payload);
+      return;
+    }
+    TerriCommunicator.send(PROTOCOL.encodeNukeRequest(payload.playerId, payload.target));
   });
 
   quitButton.addEventListener('click', function () {

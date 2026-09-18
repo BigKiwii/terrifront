@@ -40,6 +40,9 @@
       case 'UPDATE':
         TerriGameUI.applyGameUpdate({ ...message.payload, changesBuf: message.changesBuf });
         break;
+      case 'NUKE_LAUNCHED':
+        TerriGameUI.startNukeAnimation(message.payload);
+        break;
       case 'EXPANSION_REJECTED':
       case 'BOAT_REJECTED':
         TerriGameUI.rejectExpansion(message.payload);
@@ -104,5 +107,9 @@
     worker?.postMessage({ type: 'BOAT', payload, power });
   }
 
-  window.TerriOfflineGame = { start, stop, submitSpawn, requestExpansion, requestBoat, isRunning: () => running };
+  function requestNuke(payload) {
+    worker?.postMessage({ type: 'NUKE', payload });
+  }
+
+  window.TerriOfflineGame = { start, stop, submitSpawn, requestExpansion, requestBoat, requestNuke, isRunning: () => running };
 }());

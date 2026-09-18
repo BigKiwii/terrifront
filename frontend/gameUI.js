@@ -25,8 +25,16 @@
   const activeAttacksPanel = document.querySelector('#active-attacks');
   const leaderboard = document.querySelector('#leaderboard');
   const winnerBanner = document.querySelector('#winner-banner');
+  const nukeInboundBanner = document.querySelector('#nuke-inbound-banner');
+  const nukeVignette = document.querySelector('#nuke-vignette');
   const attackRatioPanel = document.querySelector('#attack-ratio-panel');
   const powerSlider = document.querySelector('#power-slider');
+  const nukeTrigger = document.querySelector('#nuke-trigger');
+  const nukeControls = document.querySelector('#nuke-controls');
+  const nukeSelectTarget = document.querySelector('#nuke-select-target');
+  const nukeLaunch = document.querySelector('#nuke-launch');
+  const nukeCancel = document.querySelector('#nuke-cancel');
+  const nukeStatus = document.querySelector('#nuke-status');
   const context = canvas.getContext('2d');
   let webglRenderer = null;
   try {
@@ -42,6 +50,8 @@
   const terrainContext = terrainCanvas.getContext('2d');
   const territoryCanvas = document.createElement('canvas');
   const territoryContext = territoryCanvas.getContext('2d');
+  const wastelandCanvas = document.createElement('canvas');
+  const wastelandContext = wastelandCanvas.getContext('2d');
   const sceneCanvas = document.createElement('canvas');
   const sceneContext = sceneCanvas.getContext('2d');
   const renderScale = 1;
@@ -62,8 +72,10 @@
   let selectedPosition = null;
   let selectedColor = '#69c878';
   let spawnSubmitHandler = null;
+  let nukeLaunchHandler = null;
   let timerHandle = null;
   let terrain = null;
+  let wasteland = null;
   let expansionTimes = null;
   let selectionLocked = false;
   let localPlayerId = null;
@@ -83,6 +95,10 @@
   let eliminationAnimationFrame = null;
   let localPlayerEliminated = false;
   let localPlayerWon = false;
+  let nukeMode = false;
+  let nukeSelecting = false;
+  let nukeTarget = null;
+  let nukeFlight = null;
   const TROOP_SMOOTHING_MS = 90;
   const LEADERBOARD_INTERVAL_MS = 250;
   const LABEL_UPDATE_INTERVAL_MS = 500;
@@ -104,6 +120,8 @@
 
   let territoryImageData = null;
   let territoryLayerDirty = false;
+  let wastelandImageData = null;
+  let wastelandLayerDirty = false;
   let localWaterBorderVersion = -1;
   let localPlayerHasWaterBorder = false;
   let dirtyMinX = Infinity;
@@ -126,6 +144,25 @@
     if (!webglRenderer || !gameData?.owners) return;
     if (changes?.length) webglRenderer.updateOwners(gameData.owners, changes);
     else webglRenderer.setOwners(gameData.owners);
+    renderState.sceneDirty = true;
+  }
+
+  function updateWebglWasteland(changes = null) {
+    if (!webglRenderer || !wasteland) return;
+    if (changes?.length) webglRenderer.updateWasteland(wasteland, changes);
+    else webglRenderer.setWasteland(wasteland);
+    renderState.sceneDirty = true;
+  }
+
+  function applyWastelandChanges(changes = []) {
+    if (!wasteland || !changes.length) return;
+    for (const change of changes) {
+      const position = typeof change === 'number' ? change : change.position;
+      const value = typeof change === 'number' ? 1 : change.value;
+      if (position >= 0 && position < wasteland.length) wasteland[position] = value;
+    }
+    updateWebglWasteland(changes);
+    updateWastelandLayer(changes);
     renderState.sceneDirty = true;
   }
 
@@ -261,6 +298,8 @@
     lastFrameAt = timestamp;
     drainPendingChanges(deltaMs);
     smoothTroops(deltaMs);
+    if (nukeFlight) renderState.dynamicDirty = true;
+    if (nukeShake) { renderState.dynamicDirty = true; applyMapTransform(); }
     if (renderState.sceneDirty) drawScene();
     if (renderState.dynamicDirty) drawDynamic();
     if (renderState.labelsDirty && (renderState.labelsCameraDirty || performance.now() - lastLabelDrawAt >= LABEL_UPDATE_INTERVAL_MS)) {
@@ -296,7 +335,32 @@
     const maxPanY = Math.max(220, (mapFrame.clientHeight * zoom - window.innerHeight) / 2 + 100);
     panX = clamp(panX, -maxPanX, maxPanX);
     panY = clamp(panY, -maxPanY, maxPanY);
-    mapFrame.style.transform = `translate3d(${panX}px, ${panY}px, 0) scale(${zoom})`;
+    // Screen shake: decaying random jitter on top of the normal pan.
+    // Uses a fast hash of (time, tick) to stay stable within a single frame
+    // but jump per-frame, giving a mechanical shudder feel rather than smooth
+    // oscillation.
+    let shakeX = 0;
+    let shakeY = 0;
+    if (nukeShake) {
+      const elapsed = performance.now() - nukeShake.startedAt;
+      if (elapsed < nukeShake.durationMs) {
+        // Decay: starts at 1, falls off quickly (cubic ease-out)
+        const t = elapsed / nukeShake.durationMs;
+        const decay = (1 - t) * (1 - t) * (1 - t);
+        const mag = nukeShake.strength * decay;
+        // Deterministic per-frame jitter via a cheap integer hash of elapsed
+        // rounded to 16ms buckets, so it changes ~every frame but is stable
+        // within a frame (no drift mid-draw).
+        const bucket = Math.floor(elapsed / 16);
+        const hx = (bucket * 1664525 + 1013904223) & 0xffffffff;
+        const hy = (bucket * 22695477 + 1) & 0xffffffff;
+        shakeX = (((hx >>> 16) & 0xff) / 127.5 - 1) * mag;
+        shakeY = (((hy >>> 16) & 0xff) / 127.5 - 1) * mag;
+      } else {
+        nukeShake = null;
+      }
+    }
+    mapFrame.style.transform = `translate3d(${panX + shakeX}px, ${panY + shakeY}px, 0) scale(${zoom})`;
     renderState.labelsCameraDirty = true;
     hideMapMenu();
     TerriPlayerLabelRenderer.invalidateLayout();
@@ -543,6 +607,27 @@
     composeSceneLayer();
   }
 
+  function paintWastelandTile(position) {
+    if (!wastelandImageData || !wasteland?.[position]) return;
+    const pixel = position * 4;
+    wastelandImageData.data[pixel] = 51;
+    wastelandImageData.data[pixel + 1] = 173;
+    wastelandImageData.data[pixel + 2] = 82;
+    wastelandImageData.data[pixel + 3] = 220;
+  }
+
+  function buildWastelandLayer() {
+    if (!gameData || !wasteland || webglRenderer) return;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    wastelandCanvas.width = width;
+    wastelandCanvas.height = height;
+    wastelandImageData = wastelandContext.createImageData(width, height);
+    for (let position = 0; position < wasteland.length; position += 1) paintWastelandTile(position);
+    wastelandContext.putImageData(wastelandImageData, 0, 0);
+    composeSceneLayer();
+  }
+
   function warFrontPlayerColors(color) {
     return colorUtils.playerColors(color);
   }
@@ -629,6 +714,32 @@
     renderState.sceneDirty = true;
   }
 
+  function updateWastelandLayer(changes) {
+    if (webglRenderer || !wastelandImageData) return;
+    for (const change of changes || []) {
+      const position = typeof change === 'number' ? change : change.position;
+      if (position < 0 || position >= wasteland.length) continue;
+      if (wasteland[position]) paintWastelandTile(position);
+      else if (wastelandImageData) {
+        const pixel = position * 4;
+        wastelandImageData.data[pixel] = 0;
+        wastelandImageData.data[pixel + 1] = 0;
+        wastelandImageData.data[pixel + 2] = 0;
+        wastelandImageData.data[pixel + 3] = 0;
+      }
+      const x = position % gameData.map.width;
+      const y = Math.floor(position / gameData.map.width);
+      dirtyMinX = Math.min(dirtyMinX, x);
+      dirtyMinY = Math.min(dirtyMinY, y);
+      dirtyMaxX = Math.max(dirtyMaxX, x);
+      dirtyMaxY = Math.max(dirtyMaxY, y);
+    }
+    if (changes?.length) {
+      wastelandLayerDirty = true;
+      renderState.sceneDirty = true;
+    }
+  }
+
   function composeSceneLayer() {
     if (!gameData || !terrainCanvas.width || !terrainCanvas.height) return;
     const width = gameData.map.width;
@@ -639,6 +750,9 @@
     }
     sceneContext.clearRect(0, 0, width, height);
     sceneContext.drawImage(terrainCanvas, 0, 0, width, height);
+    if (wastelandCanvas.width === width && wastelandCanvas.height === height) {
+      sceneContext.drawImage(wastelandCanvas, 0, 0, width, height);
+    }
     if (territoryCanvas.width === width && territoryCanvas.height === height) {
       sceneContext.drawImage(territoryCanvas, 0, 0, width, height);
     }
@@ -673,6 +787,283 @@
       dynamicContext.stroke();
     }
     dynamicContext.restore();
+  }
+
+  function drawNukeTarget() {
+    if (!nukeMode || nukeTarget === null) return;
+    const width = gameData.map.width;
+    const x = nukeTarget % width;
+    const y = Math.floor(nukeTarget / width);
+    dynamicContext.save();
+    dynamicContext.strokeStyle = '#071221';
+    dynamicContext.fillStyle = 'rgba(232, 107, 82, 0.45)';
+    dynamicContext.lineWidth = 1.5;
+    dynamicContext.beginPath();
+    dynamicContext.arc(x + 0.5, y + 0.5, 8, 0, Math.PI * 2);
+    dynamicContext.fill();
+    dynamicContext.stroke();
+    dynamicContext.beginPath();
+    dynamicContext.moveTo(x - 11, y + 0.5);
+    dynamicContext.lineTo(x + 12, y + 0.5);
+    dynamicContext.moveTo(x + 0.5, y - 11);
+    dynamicContext.lineTo(x + 0.5, y + 12);
+    dynamicContext.stroke();
+    dynamicContext.restore();
+  }
+
+  function cubicPoint(start, firstControl, secondControl, end, progress) {
+    const inverse = 1 - progress;
+    const inverseSquared = inverse * inverse;
+    const progressSquared = progress * progress;
+    return {
+      x: inverseSquared * inverse * start.x + 3 * inverseSquared * progress * firstControl.x +
+        3 * inverse * progressSquared * secondControl.x + progressSquared * progress * end.x,
+      y: inverseSquared * inverse * start.y + 3 * inverseSquared * progress * firstControl.y +
+        3 * inverse * progressSquared * secondControl.y + progressSquared * progress * end.y
+    };
+  }
+
+  // ─── Nuke flight animation ────────────────────────────────────────────────
+  // Warhead: 3×3 pixel block — centre pixel glows red, outer 8 pixels flicker
+  // yellow like a star. Leaves a 1px-wide clean white trail along the arc.
+  // On impact the warhead vanishes immediately and a brief radial flash expands
+  // from the target to signal detonation before the wasteland renders.
+
+  let nukeImpactFlash = null; // { x, y, startedAt }
+  let nukeShake = null;       // { startedAt, durationMs, strength }
+  let nukeInbound = false;    // true while a nuke is flying toward local territory
+
+  function drawNukeFlight(timestamp) {
+    // Draw lingering impact flash even after nukeFlight clears.
+    if (nukeImpactFlash) {
+      const FLASH_MS = 420;
+      const fp = Math.min(1, (timestamp - nukeImpactFlash.startedAt) / FLASH_MS);
+      if (fp < 1) {
+        const radius = fp * 32;
+        const alpha = (1 - fp) * 0.85;
+        dynamicContext.save();
+        // Outer bloom ring
+        const grad = dynamicContext.createRadialGradient(
+          nukeImpactFlash.x, nukeImpactFlash.y, 0,
+          nukeImpactFlash.x, nukeImpactFlash.y, radius
+        );
+        grad.addColorStop(0, `rgba(255,255,200,${alpha})`);
+        grad.addColorStop(0.35, `rgba(255,140,40,${alpha * 0.7})`);
+        grad.addColorStop(1, 'rgba(255,60,20,0)');
+        dynamicContext.globalAlpha = 1;
+        dynamicContext.fillStyle = grad;
+        dynamicContext.beginPath();
+        dynamicContext.arc(nukeImpactFlash.x, nukeImpactFlash.y, radius, 0, Math.PI * 2);
+        dynamicContext.fill();
+        // Hard white core that shrinks as it fades
+        dynamicContext.globalAlpha = Math.max(0, 1 - fp * 3);
+        dynamicContext.fillStyle = '#ffffff';
+        dynamicContext.fillRect(
+          nukeImpactFlash.x - 2, nukeImpactFlash.y - 2, 4, 4
+        );
+        dynamicContext.restore();
+        renderState.dynamicDirty = true;
+      } else {
+        nukeImpactFlash = null;
+      }
+    }
+
+    if (!nukeFlight) return;
+
+    const mapWidth = gameData.map.width;
+    const start = {
+      x: nukeFlight.start % mapWidth + 0.5,
+      y: Math.floor(nukeFlight.start / mapWidth) + 0.5
+    };
+    const end = {
+      x: nukeFlight.target % mapWidth + 0.5,
+      y: Math.floor(nukeFlight.target / mapWidth) + 0.5
+    };
+    const deltaX = end.x - start.x;
+    const deltaY = end.y - start.y;
+    const distance = Math.hypot(deltaX, deltaY);
+
+    // Arc: always lifts away from the midpoint toward the least-crowded edge,
+    // capped so the path never leaves the map canvas.
+    const requestedArcHeight = Math.max(40, distance / 2.8);
+    const upwardRoom = Math.min(start.y, end.y) - 0.5;
+    const downwardRoom = gameData.map.height - 0.5 - Math.max(start.y, end.y);
+    const arcSign = upwardRoom >= downwardRoom ? -1 : 1;
+    const availableRoom = Math.max(1, arcSign < 0 ? upwardRoom : downwardRoom);
+    const arcHeight = Math.min(requestedArcHeight, availableRoom * 0.85);
+
+    // Cubic Bézier control points — asymmetric so the warhead launches steeply
+    // and arrives at a shallow dive angle, matching real ICBM trajectories.
+    const ctrl1 = {
+      x: start.x + deltaX * 0.2,
+      y: clamp(start.y + deltaY * 0.05 + arcSign * arcHeight, 0.5, gameData.map.height - 0.5)
+    };
+    const ctrl2 = {
+      x: start.x + deltaX * 0.75,
+      y: clamp(start.y + deltaY * 0.6 + arcSign * arcHeight * 0.7, 0.5, gameData.map.height - 0.5)
+    };
+
+    const progress = Math.min(1, (timestamp - nukeFlight.startedAt) / nukeFlight.durationMs);
+
+    // ── Trail ──────────────────────────────────────────────────────────────
+    // Persistent full arc from launch, fading near the head. 1px-wide, white.
+    dynamicContext.save();
+    dynamicContext.lineCap = 'round';
+    dynamicContext.lineJoin = 'round';
+
+    const TRAIL_SEGMENTS = 48;
+    for (let i = 0; i < TRAIL_SEGMENTS; i++) {
+      const t0 = (i / TRAIL_SEGMENTS) * progress;
+      const t1 = ((i + 1) / TRAIL_SEGMENTS) * progress;
+      // Normalised segment position along the already-drawn trail [0..1]
+      const tNorm = (i + 0.5) / TRAIL_SEGMENTS;
+      // Fade: opaque at the back, nearly invisible just behind the head
+      const alpha = 0.18 + tNorm * (0.62 - tNorm * 0.62);
+      const p0 = cubicPoint(start, ctrl1, ctrl2, end, t0);
+      const p1 = cubicPoint(start, ctrl1, ctrl2, end, t1);
+      dynamicContext.globalAlpha = alpha;
+      dynamicContext.strokeStyle = '#ffffff';
+      dynamicContext.lineWidth = 1;
+      dynamicContext.beginPath();
+      dynamicContext.moveTo(p0.x, p0.y);
+      dynamicContext.lineTo(p1.x, p1.y);
+      dynamicContext.stroke();
+    }
+
+    // -- Warhead ---------------------------------------------------------------
+    // 5x5 pixel block (~60% bigger than original 3x3).
+    // Centre pixel = solid red core. Inner ring = orange-red pulse.
+    // Outer ring = flickering yellow star shimmer.
+    if (progress < 1) {
+      const pos = cubicPoint(start, ctrl1, ctrl2, end, progress);
+      const px = Math.round(pos.x - 2.5); // top-left of the 5x5 block
+      const py = Math.round(pos.y - 2.5);
+
+      const t = timestamp / 1000;
+      dynamicContext.globalAlpha = 1;
+
+      // Outer ring -- 16 cells along the 5x5 perimeter, flickering yellow star
+      const outerRing = [
+        [0,0],[1,0],[2,0],[3,0],[4,0],
+        [0,1],                  [4,1],
+        [0,2],                  [4,2],
+        [0,3],                  [4,3],
+        [0,4],[1,4],[2,4],[3,4],[4,4]
+      ];
+      for (let s = 0; s < outerRing.length; s++) {
+        const [ox, oy] = outerRing[s];
+        const flicker = 0.50 + 0.50 * Math.sin(t * 28 + s * 1.1);
+        dynamicContext.globalAlpha = flicker;
+        const g = Math.round(170 + 85 * flicker);
+        dynamicContext.fillStyle = `rgb(255,${g},0)`;
+        dynamicContext.fillRect(px + ox, py + oy, 1, 1);
+      }
+
+      // Inner ring -- 3x3 without corners, warm orange-red, subtly pulsing
+      const innerRing = [
+        [1,1],[2,1],[3,1],
+        [1,2],      [3,2],
+        [1,3],[2,3],[3,3]
+      ];
+      for (let s = 0; s < innerRing.length; s++) {
+        const [ox, oy] = innerRing[s];
+        const pulse = 0.75 + 0.25 * Math.sin(t * 20 + s * 0.9);
+        dynamicContext.globalAlpha = pulse;
+        dynamicContext.fillStyle = `rgb(255,${Math.round(80 + 40 * pulse)},10)`;
+        dynamicContext.fillRect(px + ox, py + oy, 1, 1);
+      }
+
+      // Centre pixel -- deep red, always fully opaque
+      dynamicContext.globalAlpha = 1;
+      dynamicContext.fillStyle = '#cc1111';
+      dynamicContext.fillRect(px + 2, py + 2, 1, 1);
+
+      // Radial halo -- scaled up to match the larger block
+      dynamicContext.globalAlpha = 0.28 + 0.12 * Math.sin(t * 18);
+      const halo = dynamicContext.createRadialGradient(
+        pos.x, pos.y, 0, pos.x, pos.y, 5.5
+      );
+      halo.addColorStop(0, 'rgba(255,200,40,0.9)');
+      halo.addColorStop(1, 'rgba(255,80,0,0)');
+      dynamicContext.fillStyle = halo;
+      dynamicContext.beginPath();
+      dynamicContext.arc(pos.x, pos.y, 5.5, 0, Math.PI * 2);
+      dynamicContext.fill();
+    }
+
+    dynamicContext.restore();
+
+    // ── Impact ─────────────────────────────────────────────────────────────
+    if (progress >= 1) {
+      // Warhead disappears instantly — spawn the flash and screen shake.
+      if (!nukeImpactFlash) {
+        nukeImpactFlash = { x: end.x, y: end.y, startedAt: timestamp };
+        nukeShake = { startedAt: timestamp, durationMs: 600, strength: 5 };
+      }
+      clearNukeInbound();
+      nukeFlight = null;
+      nukeLaunch.disabled = true;
+      nukeSelectTarget.disabled = false;
+      nukeStatus.textContent = 'IMPACT REGISTERED // DAMAGE OFFLINE';
+    }
+  }
+
+  // ── Nuke-inbound detection (client-side only) ─────────────────────────────
+  // Mirrors the server's getImpactCells circle logic to check if the local
+  // player's territory overlaps the blast radius — no server message needed.
+  const NUKE_RADIUS_CLIENT = 30;
+  const nukeCircleOffsets = [];
+  for (let oy = -NUKE_RADIUS_CLIENT; oy <= NUKE_RADIUS_CLIENT; oy += 1) {
+    const w = Math.round(Math.sqrt(NUKE_RADIUS_CLIENT ** 2 - oy ** 2));
+    nukeCircleOffsets.push({ oy, minX: -w, maxX: w });
+  }
+
+  function isNukeTargetingLocalPlayer(targetPosition) {
+    if (!gameData?.owners || !localPlayerId) return false;
+    const mapWidth = gameData.map.width;
+    const mapHeight = gameData.map.height;
+    const localOwnerId = Number(localPlayerId.replace('player-', ''));
+    const centerX = targetPosition % mapWidth;
+    const centerY = Math.floor(targetPosition / mapWidth);
+    for (const row of nukeCircleOffsets) {
+      const y = centerY + row.oy;
+      if (y < 0 || y >= mapHeight) continue;
+      const minX = Math.max(0, centerX + row.minX);
+      const maxX = Math.min(mapWidth - 1, centerX + row.maxX);
+      for (let x = minX; x <= maxX; x += 1) {
+        if (gameData.owners[y * mapWidth + x] === localOwnerId) return true;
+      }
+    }
+    return false;
+  }
+
+  function showNukeInbound() {
+    nukeInbound = true;
+    if (nukeInboundBanner) nukeInboundBanner.hidden = false;
+    if (nukeVignette) nukeVignette.hidden = false;
+  }
+
+  function clearNukeInbound() {
+    nukeInbound = false;
+    if (nukeInboundBanner) nukeInboundBanner.hidden = true;
+    if (nukeVignette) nukeVignette.hidden = true;
+  }
+
+  function startNukeFlight(data) {
+    // Accept both {startPosition, targetPosition} (multiplayer + fixed offline)
+    // and the legacy {start, target} shape as a fallback.
+    const startPos = data?.startPosition ?? data?.start;
+    const targetPos = data?.targetPosition ?? data?.target;
+    if (!gameData || !Number.isInteger(startPos) || !Number.isInteger(targetPos)) return;
+    nukeFlight = {
+      start: startPos,
+      target: targetPos,
+      startedAt: performance.now(),
+      durationMs: Math.max(3750, Number(data.durationMs) || 3750)
+    };
+    // Client-side detection: show NUKE INBOUND if blast radius overlaps our territory.
+    if (isNukeTargetingLocalPlayer(targetPos)) showNukeInbound();
+    invalidateDynamic();
   }
 
   // Cached references for leaderboard — avoids querySelector on every render.
@@ -890,7 +1281,7 @@
     }
     const width = gameData.map.width;
     const height = gameData.map.height;
-    if (territoryLayerDirty) {
+    if (territoryLayerDirty || wastelandLayerDirty) {
       if (dirtyMinX <= dirtyMaxX && dirtyMinY <= dirtyMaxY) {
         const dirtyWidth = dirtyMaxX - dirtyMinX + 1;
         const dirtyHeight = dirtyMaxY - dirtyMinY + 1;
@@ -901,14 +1292,18 @@
         // when the dirty region exceeds 60 % of either map dimension.
         const useFullBlit = dirtyWidth > width * 0.6 || dirtyHeight > height * 0.6;
         if (useFullBlit) {
-          territoryContext.putImageData(territoryImageData, 0, 0);
+          if (territoryLayerDirty) territoryContext.putImageData(territoryImageData, 0, 0);
+          if (wastelandLayerDirty) wastelandContext.putImageData(wastelandImageData, 0, 0);
           sceneContext.clearRect(0, 0, width, height);
           sceneContext.drawImage(terrainCanvas, 0, 0, width, height);
+          sceneContext.drawImage(wastelandCanvas, 0, 0, width, height);
           sceneContext.drawImage(territoryCanvas, 0, 0, width, height);
         } else {
-          territoryContext.putImageData(territoryImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+          if (territoryLayerDirty) territoryContext.putImageData(territoryImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+          if (wastelandLayerDirty) wastelandContext.putImageData(wastelandImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
           sceneContext.clearRect(dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
           sceneContext.drawImage(terrainCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
+          sceneContext.drawImage(wastelandCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
           sceneContext.drawImage(territoryCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
         }
       }
@@ -917,6 +1312,7 @@
       dirtyMaxX = -Infinity;
       dirtyMaxY = -Infinity;
       territoryLayerDirty = false;
+      wastelandLayerDirty = false;
     }
     if (!renderState.sceneDirty) return;
     context.clearRect(0, 0, width, height);
@@ -932,6 +1328,8 @@
     if (spawnPhase) drawSpawnCapitals();
     drawBoats();
     drawHover();
+    drawNukeTarget();
+    drawNukeFlight(performance.now());
     renderState.dynamicDirty = false;
   }
 
@@ -1159,6 +1557,18 @@
       }
     } else if (wasClick && activeGame) {
       const position = positionFromPointer(event);
+      if (nukeMode && nukeSelecting) {
+        if (position !== null) {
+          nukeTarget = position;
+          nukeSelecting = false;
+          nukeStatus.textContent = 'TARGET LOCKED // READY TO LAUNCH';
+          nukeLaunch.disabled = false;
+          invalidateDynamic();
+          drawDynamic();
+        }
+        hoverPosition = null;
+        return;
+      }
       const ownerId = Number(localPlayerId.replace('player-', ''));
       if (position !== null && (terrain[position] & 0x80) !== 0 && gameData.owners[position] !== ownerId) {
         mapActionHandler?.({ playerId: localPlayerId, position });
@@ -1275,6 +1685,51 @@
     updateRatioDisplay();
   });
 
+  function setNukeMode(enabled) {
+    nukeMode = enabled;
+    nukeSelecting = enabled;
+    nukeTarget = null;
+    gameScreen.classList.toggle('nuke-mode', enabled);
+    nukeControls.hidden = !enabled;
+    attackRatioPanel.hidden = enabled || !activeGame;
+    leaderboard.hidden = enabled || !activeGame;
+    activeAttacksPanel.hidden = enabled;
+    nukeLaunch.disabled = true;
+    nukeSelectTarget.disabled = false;
+    nukeStatus.textContent = 'SELECT A TARGET';
+    if (enabled) hideMapMenu();
+    invalidateDynamic();
+    drawDynamic();
+  }
+
+  nukeTrigger.addEventListener('click', () => setNukeMode(true));
+  nukeSelectTarget.addEventListener('click', () => {
+    if (nukeFlight) return;
+    nukeSelecting = true;
+    nukeTarget = null;
+    nukeLaunch.disabled = true;
+    nukeStatus.textContent = 'SELECT A TARGET';
+    invalidateDynamic();
+    drawDynamic();
+  });
+  nukeLaunch.addEventListener('click', () => {
+    if (nukeTarget === null || nukeFlight) return;
+    const localPlayer = playerMap.get(localPlayerId);
+    const launchPosition = localPlayer?.spawnPosition ?? selectedPosition ?? confirmedPosition;
+    if (!Number.isInteger(launchPosition)) {
+      nukeStatus.textContent = 'CAPITAL POSITION UNAVAILABLE';
+      return;
+    }
+    const launch = { playerId: localPlayerId, start: launchPosition, target: nukeTarget };
+    if (nukeLaunchHandler) nukeLaunchHandler(launch);
+    else startNukeFlight(launch);
+    setNukeMode(false);
+  });
+  nukeCancel.addEventListener('click', () => {
+    nukeFlight = null;
+    setNukeMode(false);
+  });
+
   const ratioTrack = document.querySelector('.ratio-bar-track');
   if (ratioTrack) {
     function ratioFromEvent(event) {
@@ -1333,10 +1788,21 @@
     onSpawnSubmit(handler) {
       spawnSubmitHandler = handler;
     },
+    onNukeLaunch(handler) {
+      nukeLaunchHandler = handler;
+    },
+    startNukeAnimation(data) {
+      startNukeFlight(data);
+    },
     start(data) {
       stopRenderLoop();
       const sessionId = ++gameSessionId;
       gameData = data;
+      nukeFlight = null;
+      nukeImpactFlash = null;
+      nukeShake = null;
+      clearNukeInbound();
+      setNukeMode(false);
       territoryVersion = 0;
       displayTroops = 0;
       targetTroops = 0;
@@ -1345,11 +1811,16 @@
       gameData.players = [{ playerId: data.playerId, playerName: data.playerName, troops: 0, territorySize: 0 }];
       rebuildPlayerMap();
       gameData.owners = new Int32Array(data.map.width * data.map.height);
+      wasteland = new Uint8Array(data.map.width * data.map.height);
+      wastelandCanvas.width = data.map.width;
+      wastelandCanvas.height = data.map.height;
       labelTerritoryVersion = -1;
       updateWebglOwners();
+      updateWebglWasteland();
       updateWebglPalette();
       territoryCanvas.width = data.map.width;
       territoryCanvas.height = data.map.height;
+      wastelandImageData = wastelandContext.createImageData(data.map.width, data.map.height);
       territoryImageData = territoryContext.createImageData(data.map.width, data.map.height);
       territoryContext.putImageData(territoryImageData, 0, 0);
       terrain = null;
@@ -1505,6 +1976,7 @@
         forEachChange(activeChanges, (position, owner) => { gameData.owners[position] = owner; });
         updateWebglOwners(activeChanges);
         updateWebglPalette();
+        applyWastelandChanges(data.wastelandChanges || []);
         rebuildTerritoryLayer();
         const player = data.players.find((item) => item.playerId === localPlayerId);
         localCapitalCells = new Set();
@@ -1533,6 +2005,7 @@
       lastPacketAt = now;
       const hadBoats = boats.length > 0;
       boats.splice(0, boats.length, ...(data.boats || []));
+      applyWastelandChanges(data.wastelandChanges || []);
       updateActiveAttacks(data.activeAttacks || []);
       if (hadBoats || boats.length) invalidateDynamic();
       queueChanges(decodeChangesBuf(data));
@@ -1578,6 +2051,7 @@
         winnerBanner.textContent = 'LOST';
         winnerBanner.hidden = false;
         activeGame = false;
+        setNukeMode(false);
         selectionLocked = true;
         attackRatioPanel.hidden = true;
         updateActiveAttacks([]);
@@ -1587,6 +2061,7 @@
         localPlayerWon = true;
         winnerBanner.hidden = false;
         activeGame = false;
+        setNukeMode(false);
         selectionLocked = true;
         attackRatioPanel.hidden = true;
         updateActiveAttacks([]);
@@ -1605,6 +2080,11 @@
       stopRenderLoop();
       spawnPhase = null;
       activeGame = false;
+      nukeFlight = null;
+      nukeImpactFlash = null;
+      nukeShake = null;
+      clearNukeInbound();
+      setNukeMode(false);
       updateActiveAttacks([]);
       winnerBanner.hidden = true;
       // Reset cached leaderboard DOM references so the next session rebuilds

@@ -176,6 +176,12 @@
       } else if (message.type === 'BOAT') {
         const result = engine.requestBoat(message.payload.playerId, message.payload.position, message.power);
         if (!result.accepted) self.postMessage({ type: 'BOAT_REJECTED', payload: result });
+      } else if (message.type === 'NUKE') {
+        const result = engine.requestNuke(message.payload.playerId, message.payload.target);
+        if (result.accepted) self.postMessage({
+          type: 'NUKE_LAUNCHED',
+          payload: { ...result, start: result.startPosition, target: result.targetPosition }
+        });
       }
     } catch (error) {
       self.postMessage({ type: 'ERROR', message: error.message });

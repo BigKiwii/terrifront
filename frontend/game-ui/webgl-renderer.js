@@ -19,6 +19,7 @@ precision highp int;
 
 uniform sampler2D uTerrain;
 uniform highp usampler2D uOwners;
+uniform highp usampler2D uWasteland;
 uniform sampler2D uPalette;
 uniform ivec2 uMapSize;
 in vec2 vTexCoord;
@@ -34,6 +35,11 @@ void main() {
     clamp(int((1.0 - vTexCoord.y) * float(uMapSize.y)), 0, uMapSize.y - 1)
   );
   vec4 baseColor = texelFetch(uTerrain, cell, 0);
+  uint wasteland = texelFetch(uWasteland, cell, 0).r;
+  if (wasteland != 0u) {
+    outColor = vec4(mix(baseColor.rgb, vec3(0.2, 0.68, 0.32), 0.78), 1.0);
+    return;
+  }
   uint owner = texelFetch(uOwners, cell, 0).r;
   if (owner == 0u) {
     outColor = baseColor;
@@ -99,15 +105,18 @@ void main() {
     const mapSizeLocation = gl.getUniformLocation(program, 'uMapSize');
     const terrainLocation = gl.getUniformLocation(program, 'uTerrain');
     const ownersLocation = gl.getUniformLocation(program, 'uOwners');
+    const wastelandLocation = gl.getUniformLocation(program, 'uWasteland');
     const paletteLocation = gl.getUniformLocation(program, 'uPalette');
     const vertexArray = gl.createVertexArray();
     const vertexBuffer = gl.createBuffer();
     const terrainTexture = gl.createTexture();
     const ownersTexture = gl.createTexture();
+    const wastelandTexture = gl.createTexture();
     const paletteTexture = gl.createTexture();
     let width = 1;
     let height = 1;
     let ownerData = new Uint16Array(1);
+    let wastelandData = new Uint8Array(1);
     let mapReady = false;
 
     gl.bindVertexArray(vertexArray);
@@ -133,6 +142,7 @@ void main() {
 
     configureTexture(terrainTexture, gl.NEAREST, gl.NEAREST);
     configureTexture(ownersTexture, gl.NEAREST, gl.NEAREST);
+    configureTexture(wastelandTexture, gl.NEAREST, gl.NEAREST);
     configureTexture(paletteTexture, gl.NEAREST, gl.NEAREST);
 
     function resize() {
@@ -160,6 +170,7 @@ void main() {
       gl.bindTexture(gl.TEXTURE_2D, terrainTexture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
       if (ownerData.length === width * height) uploadOwners();
+      if (wastelandData.length === width * height) uploadWasteland();
       mapReady = ownerData.length === width * height;
       gl.useProgram(program);
       gl.uniform2i(mapSizeLocation, width, height);
@@ -175,6 +186,49 @@ void main() {
       ownerData.set(owners);
       mapReady = ownerData.length === width * height;
       if (mapReady) uploadOwners();
+    }
+
+    function uploadWasteland() {
+      gl.bindTexture(gl.TEXTURE_2D, wastelandTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_BYTE, wastelandData);
+    }
+
+    function setWasteland(wasteland) {
+      if (wastelandData.length !== wasteland.length) wastelandData = new Uint8Array(wasteland.length);
+      wastelandData.set(wasteland);
+      if (wastelandData.length === width * height) uploadWasteland();
+    }
+
+    function updateWasteland(wasteland, changes) {
+      if (wastelandData.length !== wasteland.length) wastelandData = new Uint8Array(wasteland.length);
+      const rows = new Map();
+      for (const change of changes || []) {
+        const position = typeof change === 'number' ? change : change.position;
+        if (!Number.isInteger(position) || position < 0 || position >= wastelandData.length) continue;
+        wastelandData[position] = typeof change === 'number' ? 1 : change.value;
+        const y = Math.floor(position / width);
+        const x = position % width;
+        if (!rows.has(y)) rows.set(y, []);
+        rows.get(y).push(x);
+      }
+      if (rows.size > 512 || changes?.length > 2048) {
+        uploadWasteland();
+        return;
+      }
+      gl.bindTexture(gl.TEXTURE_2D, wastelandTexture);
+      for (const [y, positions] of rows) {
+        positions.sort((first, second) => first - second);
+        let start = positions[0];
+        let end = start;
+        for (let index = 1; index <= positions.length; index += 1) {
+          const next = index < positions.length ? positions[index] : -1;
+          if (next !== end + 1 && next !== end) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, start, y, end - start + 1, 1, gl.RED_INTEGER, gl.UNSIGNED_BYTE, wastelandData.subarray(y * width + start, y * width + end + 1));
+            start = next;
+          }
+          end = next;
+        }
+      }
     }
 
     function updateOwners(owners, changes) {
@@ -237,18 +291,21 @@ void main() {
       gl.useProgram(program);
       gl.uniform1i(terrainLocation, 0);
       gl.uniform1i(ownersLocation, 1);
-      gl.uniform1i(paletteLocation, 2);
+      gl.uniform1i(wastelandLocation, 2);
+      gl.uniform1i(paletteLocation, 3);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, terrainTexture);
       gl.activeTexture(gl.TEXTURE1);
       gl.bindTexture(gl.TEXTURE_2D, ownersTexture);
       gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, wastelandTexture);
+      gl.activeTexture(gl.TEXTURE3);
       gl.bindTexture(gl.TEXTURE_2D, paletteTexture);
       gl.bindVertexArray(vertexArray);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
-    return { resize, setTerrain, setOwners, updateOwners, setPalette, draw };
+    return { resize, setTerrain, setOwners, updateOwners, setWasteland, updateWasteland, setPalette, draw };
   }
 
   modules.webglRenderer = { createMapRenderer };

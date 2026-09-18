@@ -73,15 +73,32 @@
       </button>
     </div>
     <div class="winner-banner" id="winner-banner" hidden role="status" aria-live="polite">WINNER</div>
+    <div class="nuke-inbound-banner" id="nuke-inbound-banner" hidden role="alert" aria-live="assertive">
+      <span class="nuke-inbound-icon">☢</span>
+      NUKE INBOUND
+      <span class="nuke-inbound-icon">☢</span>
+    </div>
+    <div class="nuke-vignette" id="nuke-vignette" hidden aria-hidden="true"></div>
     <div class="active-attacks" id="active-attacks" aria-live="polite"></div>
     <div class="selector-stats" id="selector-stats" hidden>
       <div class="selector-troops">
         <span class="selector-troops-icon">⚔</span>
         <span id="selector-troop-count">0</span>
+        <div class="selector-actions" aria-label="Command actions">
+          <button class="selector-action nuke-trigger" id="nuke-trigger" type="button" aria-label="Launch a nuke" title="Launch a nuke">
+            <img src="../Assets/nuke_icon.png" alt="">
+          </button>
+        </div>
       </div>
       <div class="selector-meta">
         <span>▦ <b id="selector-territory">0</b></span>
         <span>⬡ <b id="selector-density">0.00</b></span>
+      </div>
+      <div class="nuke-controls" id="nuke-controls" hidden>
+        <span class="nuke-status" id="nuke-status">SELECT A TARGET</span>
+        <button class="nuke-control-button" id="nuke-select-target" type="button">SELECT TARGET</button>
+        <button class="nuke-control-button is-launch" id="nuke-launch" type="button" disabled>LAUNCH NUKE</button>
+        <button class="nuke-control-button is-cancel" id="nuke-cancel" type="button">CANCEL NUKE</button>
       </div>
     </div>
     <div class="attack-ratio-panel" id="attack-ratio-panel" hidden>
@@ -113,6 +130,33 @@
   <script src="game-ui/map-geometry.js"></script>
   <script src="game-ui/color-utils.js"></script>
   <script src="game-ui/game-store.js"></script>
+  <script src="game-ui/render-loop.js"></script>
+  <script src="game-ui/map-assets.js"></script>
+  <script src="game-ui/leaderboard.js"></script>
+  <script src="game-ui/active-attacks.js"></script>
+  <script src="game-ui/player-stats.js"></script>
+  <script src="game-ui/spawn-hud.js"></script>
+  <script src="game-ui/attack-ratio.js"></script>
+  <script src="game-ui/map-menu.js"></script>
+  <script src="game-ui/nuke-controls.js"></script>
+  <script src="game-ui/canvas-resizer.js"></script>
+  <script src="game-ui/map-rules.js"></script>
+  <script src="game-ui/rendering/webgl-sync.js"></script>
+  <script src="game-ui/rendering/color-cache.js"></script>
+  <script src="game-ui/rendering/scene-renderer.js"></script>
+  <script src="game-ui/rendering/dynamic-renderer.js"></script>
+  <script src="game-ui/rendering/label-scheduler.js"></script>
+  <script src="game-ui/rendering/dynamic-scheduler.js"></script>
+  <script src="game-ui/input/map-transform.js"></script>
+  <script src="game-ui/input/camera-controller.js"></script>
+  <script src="game-ui/input/map-gestures.js"></script>
+  <script src="game-ui/core/player-registry.js"></script>
+  <script src="game-ui/hud/ratio-display.js"></script>
+  <script src="game-ui/math-utils.js"></script>
+  <script src="game-ui/format-utils.js"></script>
+  <script src="game-ui/change-buffer.js"></script>
+  <script src="game-ui/map-coordinates.js"></script>
+  <script src="game-ui/nuke-geometry.js"></script>
   <script src="offline-coordinator.js"></script>
   <script src="gameUI.js"></script>
   <script src="index.js"></script>

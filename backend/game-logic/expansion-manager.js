@@ -123,6 +123,7 @@ class ExpansionManager {
 
   tick() {
     const tickChanges = this._tickChanges;
+    const wastelandChanges = [];
     const attacksToFinish = this._attacksToFinish;
     tickChanges.length = 0;
     attacksToFinish.length = 0;
@@ -149,6 +150,7 @@ class ExpansionManager {
         attack.frontierDirty = true;
         this.markOwnerFrontiersDirty(attack.ownerId);
         tickChanges.push({ position, owner: attack.ownerId });
+        if (result.wastelandCleared) wastelandChanges.push({ position, value: 0 });
         for (const releasedPosition of result.releasedPositions || []) {
           tickChanges.push({ position: releasedPosition, owner: 0 });
         }
@@ -176,6 +178,7 @@ class ExpansionManager {
       if (attack.troops <= 0 || (attack.scheduledTiles <= 0 && attack.tileQueue.size === 0)) attacksToFinish.push(attack);
     }
     for (const attack of attacksToFinish) this.finishAttack(attack);
+    tickChanges.wastelandChanges = wastelandChanges;
     return tickChanges;
   }
 
@@ -266,7 +269,7 @@ class ExpansionManager {
       for (const neighbor of this.map.getNeighbors(position)) {
         if (this.map.owners[neighbor] === attack.ownerId) contacts += 1;
       }
-      const expansionTime = this.map.expansionTimes?.[position] || 50;
+      const expansionTime = (this.map.expansionTimes?.[position] || 50) * (this.map.wasteland?.[position] ? 2 : 1);
       const jitter = Math.random() * 0.06;
       const momentum = attack.neutralMomentum ? 0.6 : 1;
       const delayTicks = Math.max(1, Math.floor(expansionTime * (0.08 - 0.02 * Math.min(3, contacts) + jitter) * speedFactor * momentum));
@@ -356,6 +359,10 @@ class ExpansionManager {
 
   markOwnerFrontiersDirty(ownerId) {
     for (const attack of this.attacksByOwner.get(ownerId) || []) attack.frontierDirty = true;
+  }
+
+  markAllFrontiersDirty() {
+    for (const attack of this.attacks.values()) attack.frontierDirty = true;
   }
 
   cancel(playerId) {

@@ -82,6 +82,42 @@ class TerritoryManager {
     this.territorySizes.set(ownerId, Math.max(0, (this.territorySizes.get(ownerId) ?? 0) - cells.length));
   }
 
+  destroyCells(cells) {
+    const affectedPositions = new Set();
+    const affectedOwners = new Set();
+    const destroyedByOwner = new Map();
+    for (const position of cells) {
+      const ownerId = this.map.owners[position];
+      affectedPositions.add(position);
+      for (const neighbor of this.map.getNeighbors(position)) affectedPositions.add(neighbor);
+      if (!ownerId) continue;
+      affectedOwners.add(ownerId);
+      destroyedByOwner.set(ownerId, (destroyedByOwner.get(ownerId) || 0) + 1);
+      this.map.owners[position] = 0;
+      this.ownedCells.get(ownerId)?.delete(position);
+    }
+
+    for (const [ownerId, count] of destroyedByOwner) {
+      const nextSize = Math.max(0, (this.territorySizes.get(ownerId) ?? 0) - count);
+      this.territorySizes.set(ownerId, nextSize);
+      if (nextSize === 0) {
+        this.borderTiles.delete(ownerId);
+        this.ownedCells.delete(ownerId);
+      }
+    }
+
+    for (const position of affectedPositions) this.updateTileGrade(position);
+    for (const position of affectedPositions) {
+      const ownerId = this.map.owners[position];
+      if (ownerId) affectedOwners.add(ownerId);
+    }
+    for (const ownerId of affectedOwners) {
+      if (!this.territorySizes.get(ownerId)) continue;
+      for (const position of affectedPositions) this.refreshBorder(position, ownerId);
+    }
+    return destroyedByOwner;
+  }
+
   initializeGrades() {
     if (this.gradesInitialized) return;
     for (let position = 0; position < this.map.cellCount; position += 1) this.updateTileGrade(position);
@@ -121,6 +157,7 @@ class TerritoryManager {
     let attackerLoss = this.map.expansionTimes?.[position]
       ? this.map.expansionTimes[position] / 50
       : 0;
+    if (this.map.wasteland?.[position]) attackerLoss = Math.max(1, Math.ceil(attackerLoss * 3));
     if (defender) {
       const territorySize = this.getTerritorySize(defenderId);
       const defenderDensity = defender.troops / Math.max(1, territorySize);
@@ -141,6 +178,8 @@ class TerritoryManager {
         if (defender) defender.troops = 0;
       }
     }
+    const wastelandCleared = Boolean(this.map.wasteland?.[position]);
+    if (wastelandCleared) this.map.wasteland[position] = 0;
     this.map.owners[position] = attackerId;
     this.ownedCells.get(defenderId)?.delete(position);
     if (!this.ownedCells.has(attackerId)) this.ownedCells.set(attackerId, new Set());
@@ -167,7 +206,7 @@ class TerritoryManager {
       const defender = players.get(`player-${defenderId}`);
       if (defender) defender.troops = 0;
     }
-    return { success: true, attackerLoss, eliminatedOwnerId, releasedPositions };
+    return { success: true, attackerLoss, eliminatedOwnerId, releasedPositions, wastelandCleared };
   }
 
   shouldEliminate(ownerId) {

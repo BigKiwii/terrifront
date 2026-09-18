@@ -12,6 +12,7 @@ const {
   encodeRejected,
   encodeGameStarted,
   encodeGameUpdate,
+  encodeNukeLaunched,
   decodeClientMessage
 } = require('../shared/binary-protocol');
 const GameMaster = require('./game-master-main/game-master');
@@ -22,6 +23,7 @@ const port = Number(process.env.PORT || 8080);
 const root = path.resolve(__dirname, '..');
 const fileCache = new Map();
 const gzipCache = new Map();
+const fileCacheMtimes = new Map();
 
 function isCompressible(filePath) {
   return /\.(html|js|css|json)$/.test(filePath);
@@ -31,6 +33,7 @@ function cacheStaticFile(filePath) {
   try {
     const content = fs.readFileSync(filePath);
     const cacheKey = path.relative(root, filePath).replace(/\\/g, '/');
+    fileCacheMtimes.set(cacheKey, fs.statSync(filePath).mtimeMs);
     fileCache.set(cacheKey, content);
     if (isCompressible(filePath)) gzipCache.set(cacheKey, zlib.gzipSync(content, { level: 6 }));
     return content;
@@ -54,11 +57,14 @@ const staticServer = http.createServer((request, response) => {
     return;
   }
 
-  let payload = fileCache.get(requestedPath.replace(/^\//, ''));
-  if (!payload && fs.existsSync(filePath)) {
+  const cacheKey = requestedPath.replace(/^\//, '');
+  const fileStats = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
+  let payload = fileCache.get(cacheKey);
+  if (fileStats && (!payload || fileCacheMtimes.get(cacheKey) !== fileStats.mtimeMs)) {
     payload = fs.readFileSync(filePath);
-    const cacheKey = requestedPath.replace(/^\//, '');
+    fileCacheMtimes.set(cacheKey, fileStats.mtimeMs);
     fileCache.set(cacheKey, payload);
+    gzipCache.delete(cacheKey);
     if (isCompressible(filePath)) gzipCache.set(cacheKey, zlib.gzipSync(payload, { level: 6 }));
   }
 
@@ -77,7 +83,6 @@ const staticServer = http.createServer((request, response) => {
   const cacheControl = filePath.endsWith('.html')
     ? 'no-cache, no-store, must-revalidate'
     : 'public, max-age=31536000, immutable';
-  const cacheKey = requestedPath.replace(/^\//, '');
   const acceptsGzip = isCompressible(filePath) && /\bgzip\b/.test(request.headers['accept-encoding'] || '');
   const responseHeaders = {
     'Content-Type': contentType,
@@ -229,6 +234,20 @@ server.on('connection', (socket) => {
       if (!result.accepted) {
         watchDog.send(socket, encodeRejected(OP.BOAT_REJECTED, result.reason));
         return;
+      }
+      return;
+    }
+
+    if (message.opcode === OP.NUKE_REQUEST) {
+      if (!isAuthorizedMatchAction(socket, message.playerId)) return;
+      const result = gameMaster.requestNuke(message.playerId, message.targetPosition);
+      if (!result.accepted) {
+        watchDog.send(socket, encodeRejected(OP.GAME_REJECTED, result.reason));
+        return;
+      }
+      const payload = encodeNukeLaunched(result);
+      for (const peer of gameSockets.get(socket.gameId) || []) {
+        if (peer.readyState === WebSocket.OPEN) watchDog.send(peer, payload);
       }
       return;
     }

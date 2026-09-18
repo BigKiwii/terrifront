@@ -120,6 +120,12 @@ class GameMaster {
     return player.engine.requestBoat(playerId, position, power);
   }
 
+  requestNuke(playerId, targetPosition) {
+    const player = this.players.get(playerId);
+    if (!player) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
+    return player.engine.requestNuke(playerId, targetPosition);
+  }
+
   startTicker(onUpdate, onGameStarted = () => {}) {
     if (this.tickHandle) return;
     this.tickHandle = setInterval(() => {
