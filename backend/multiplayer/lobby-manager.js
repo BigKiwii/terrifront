@@ -1,6 +1,6 @@
 const Lobby = require('./lobby');
 
-const DEFAULT_LOBBY_DURATION_MS = 30000;
+const DEFAULT_LOBBY_DURATION_MS = Number(process.env.TERRIFRONT_LOBBY_DURATION_MS || 30000);
 const DEFAULT_MAX_PLAYERS = 250;
 
 class LobbyManager {
@@ -72,11 +72,24 @@ class LobbyManager {
     }
     this.createNextLobby();
     if (lobby.status === 'STARTING' && this.onStart) {
-      Promise.resolve(this.onStart(lobby)).catch((error) => {
-        lobby.status = 'DISCARDED';
-        console.error(`[${new Date().toISOString()}] MATCH_START_FAILED lobbyId=${lobby.lobbyId} reason=${error.message}`);
-      });
+      Promise.resolve(this.onStart(lobby))
+        .then(() => this.dispose(lobby))
+        .catch((error) => {
+          lobby.status = 'DISCARDED';
+          this.dispose(lobby);
+          console.error(`[${new Date().toISOString()}] MATCH_START_FAILED lobbyId=${lobby.lobbyId} reason=${error.message}`);
+        });
+    } else {
+      this.dispose(lobby);
     }
+  }
+
+  dispose(lobby) {
+    if (this.lobbies.get(lobby.lobbyId) !== lobby) return;
+    for (const playerId of lobby.players.keys()) {
+      if (this.playerLobbies.get(playerId) === lobby.lobbyId) this.playerLobbies.delete(playerId);
+    }
+    this.lobbies.delete(lobby.lobbyId);
   }
 }
 

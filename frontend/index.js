@@ -3,6 +3,7 @@
 
   const nameInput = document.querySelector('#player-name');
   const launchForm = document.querySelector('#launch-form');
+  const multiplayerButton = document.querySelector('#multiplayer-button');
   const status = document.querySelector('#launch-status');
   const homeScreen = document.querySelector('.home-screen');
   const lobbyScreen = document.querySelector('#lobby-screen');
@@ -53,6 +54,24 @@
   }
 
   nameInput.value = randomName();
+
+  multiplayerButton.addEventListener('click', function () {
+    const playerName = nameInput.value.trim();
+    if (!playerName) {
+      nameInput.focus();
+      status.textContent = 'ENTER A PLAYER NAME TO DEPLOY.';
+      return;
+    }
+    status.textContent = 'CONNECTING TO LIVE FRONT...';
+    TerriCommunicator.connect()
+      .then(() => {
+        TerriCommunicator.send(PROTOCOL.encodeRequestLobby());
+        status.textContent = 'FINDING OPEN LOBBY...';
+      })
+      .catch(() => {
+        status.textContent = 'MULTIPLAYER SERVER UNAVAILABLE.';
+      });
+  });
 
   TerriCommunicator.on(OP.GAME_ACCEPTED, function (message) {
     homeScreen.hidden = true;

@@ -1,6 +1,7 @@
 const NUKE_RADIUS = 30;
 const NUKE_SPEED_CELLS_PER_SECOND = 240;
 const NUKE_MIN_DURATION_MS = 3750;
+const MAX_PENDING_NUKES = 3;
 
 const circleOffsets = [];
 for (let offsetY = -NUKE_RADIUS; offsetY <= NUKE_RADIUS; offsetY += 1) {
@@ -84,6 +85,7 @@ module.exports = {
   NUKE_RADIUS,
   NUKE_SPEED_CELLS_PER_SECOND,
   NUKE_MIN_DURATION_MS,
+  MAX_PENDING_NUKES,
   createWasteland,
   getNukeDuration,
   getImpactCells,

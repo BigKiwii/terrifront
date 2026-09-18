@@ -4,11 +4,14 @@ const TerritoryManager = require('../game-logic/territory-manager');
 const ExpansionManager = require('../game-logic/expansion-manager');
 const { BotManager } = require('../bots/bot-manager');
 const BoatManager = require('../game-logic/boat-manager');
+const { performance } = require('node:perf_hooks');
+const runtimeMetrics = require('../diagnostics/runtime-metrics');
 const {
   createWasteland,
   getNukeDuration,
   applyNukeImpact,
-  getWastelandPositions
+  getWastelandPositions,
+  MAX_PENDING_NUKES
 } = require('../game-logic/nukes');
 const {
   ECONOMY_TICKS_PER_SECOND,
@@ -46,6 +49,8 @@ class GameEngine {
     if (!this.territoryManager) this.territoryManager = new TerritoryManager(this.map);
     if (!this.expansionManager) this.expansionManager = new ExpansionManager(this.map, this.territoryManager, this.players);
     if (!this.boatManager) this.boatManager = new BoatManager(this.map, this.territoryManager, this.players, this.expansionManager);
+    this.territoryManager.setChangeHandler((change) => this.expansionManager.handleTerritoryChange(change));
+    this.expansionManager.attachBoatManager(this.boatManager);
     this.botManager?.invalidatePlayerCache();
     this.players.set(playerId, {
       playerId,
@@ -66,7 +71,7 @@ class GameEngine {
     };
   }
 
-  startSpawnPhase(durationMs = 30000) {
+  startSpawnPhase(durationMs = Number(process.env.TERRIFRONT_SPAWN_DURATION_MS || 30000)) {
     this.phase = 'SPAWNING';
     this.spawnDeadline = Date.now() + durationMs;
     const maxPlayers = Math.min(500, Math.max(8, BOT_COUNT));
@@ -104,6 +109,11 @@ class GameEngine {
     if (!player) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
     if (this.phase !== 'SPAWNING') return { accepted: false, reason: 'SPAWN_PHASE_CLOSED' };
     if (Date.now() > this.spawnDeadline + 1000) return { accepted: false, reason: 'SPAWN_DEADLINE_PASSED' };
+    if (position == null || position === 0xffffffff) {
+      const randomPosition = this.spawnManager.randomPosition();
+      if (randomPosition === null) return { accepted: false, reason: 'INVALID_SPAWN_LOCATION' };
+      position = randomPosition;
+    }
     if (!Number.isInteger(position)) return { accepted: false, reason: 'INVALID_POSITION' };
 
     const previousCells = [...player.spawnCells];
@@ -160,14 +170,23 @@ class GameEngine {
   tick(now = Date.now()) {
     if (this.phase !== 'ACTIVE') return null;
     if (this.winnerId) return null;
+    const tickStarted = performance.now();
+    const timings = { totalMs: 0, botMs: 0, expansionMs: 0, boatMs: 0, nukeMs: 0, economyMs: 0 };
     this.tickCount += 1;
     const hadActiveAttacks = this.expansionManager.attacks.size > 0;
+    let phaseStarted = performance.now();
     this.botManager?.tick(this.tickCount);
+    timings.botMs = performance.now() - phaseStarted;
+    phaseStarted = performance.now();
     const changes = this.expansionManager.tick();
+    timings.expansionMs = performance.now() - phaseStarted;
     const wastelandChanges = changes.wastelandChanges || [];
     changes.wastelandChanges = undefined;
+    phaseStarted = performance.now();
     for (const landing of this.boatManager.tick()) changes.push(landing);
+    timings.boatMs = performance.now() - phaseStarted;
     const impactWastelandChanges = [];
+    phaseStarted = performance.now();
     if (this.pendingNukes.length) {
       const pending = this.pendingNukes;
       this.pendingNukes = [];
@@ -183,17 +202,19 @@ class GameEngine {
           wasteland: this.wasteland,
           targetPosition: nuke.targetPosition
         });
-        this.expansionManager.markAllFrontiersDirty();
         changes.push(...impact.ownerChanges);
         impactWastelandChanges.push(...impact.wastelandChanges);
       }
     }
+    timings.nukeMs = performance.now() - phaseStarted;
     this.updateWinner();
     const economyTick = this.tickCount % ECONOMY_TICKS_PER_SECOND === 0;
     const attacksEnded = hadActiveAttacks && this.expansionManager.attacks.size === 0;
     if (economyTick) {
       this.economyTickCount += 1;
+      phaseStarted = performance.now();
       this.collectIncome();
+      timings.economyMs = performance.now() - phaseStarted;
     }
 
     // Fast-exit: nothing happened this tick at all — no tile changes, no
@@ -207,9 +228,16 @@ class GameEngine {
       this.boatManager.boats.size === 0 &&
       this.expansionManager.attacks.size === 0 &&
       !attacksEnded
-    ) return null;
+    ) {
+      timings.totalMs = performance.now() - tickStarted;
+      runtimeMetrics.recordTick(this.gameId, timings, this, false);
+      return null;
+    }
 
-    return this.getTickState(changes, economyTick, attacksEnded, wastelandChanges.concat(impactWastelandChanges));
+    const update = this.getTickState(changes, economyTick, attacksEnded, wastelandChanges.concat(impactWastelandChanges));
+    timings.totalMs = performance.now() - tickStarted;
+    runtimeMetrics.recordTick(this.gameId, timings, this, Boolean(update));
+    return update;
   }
 
   requestExpansion(playerId, position, power = 1000) {
@@ -242,6 +270,7 @@ class GameEngine {
     }
     const player = this.players.get(playerId);
     if (!player || !Number.isInteger(player.spawnPosition)) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
+    if (this.pendingNukes.length >= MAX_PENDING_NUKES) return { accepted: false, reason: 'NUKE_LIMIT_REACHED' };
     const durationMs = getNukeDuration(player.spawnPosition, targetPosition, this.map);
     this.pendingNukes.push({ targetPosition, impactAt: Date.now() + durationMs });
     return { accepted: true, playerId, startPosition: player.spawnPosition, targetPosition, durationMs };
@@ -283,8 +312,18 @@ class GameEngine {
       this.winnerId = player.playerId;
       this.expansionManager.stopAllAttacks();
       this.boatManager.stopAll();
+      this.phase = 'FINISHED';
       return;
     }
+  }
+
+  close() {
+    this.expansionManager?.stopAllAttacks();
+    this.boatManager?.stopAll();
+    this.pendingNukes.length = 0;
+    this.botManager = null;
+    this.players.clear();
+    this.phase = 'CLOSED';
   }
 
   getState() {

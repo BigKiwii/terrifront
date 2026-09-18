@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createMap } = require('../backend/game-logic/map-generator');
+const { createMap, cloneMap } = require('../backend/game-logic/map-generator');
 const TerritoryManager = require('../backend/game-logic/territory-manager');
 const GameEngine = require('../backend/game-master-main/game-engine');
 const {
@@ -13,6 +13,18 @@ const {
 function createLandMap(width = 50, height = 50) {
   return createMap(new Uint8Array(width * height).fill(0x80), width, height, new Uint8Array(width * height).fill(50));
 }
+
+test('map clones share immutable topology but isolate ownership', () => {
+  const source = createLandMap(20, 20);
+  const clone = cloneMap(source);
+  assert.notEqual(clone.owners, source.owners);
+  assert.equal(clone.topology, source.topology);
+  assert.equal(clone.terrain, source.terrain);
+  assert.equal(clone.expansionTimes, source.expansionTimes);
+  assert.equal(clone.getNeighbors(21), source.getNeighbors(21));
+  clone.owners[21] = 7;
+  assert.equal(source.owners[21], 0);
+});
 
 test('nuke impact is a clipped land-only circle', () => {
   const map = createLandMap(80, 80);
@@ -104,4 +116,62 @@ test('wasteland conquest has a real three-times troop cost', () => {
   const captured = territory.attackTile(10 * map.width + 11, 1, 3, players);
   assert.equal(captured.success, true);
   assert.equal(map.wasteland[10 * map.width + 11], 0);
+});
+
+test('nuke queue is bounded per game', async () => {
+  const map = createLandMap(50, 50);
+  const engine = new GameEngine('nuke-limit-test', map);
+  await engine.addPlayer('Tester', 'player-1');
+  engine.startSpawnPhase(100000);
+  assert.equal(engine.selectSpawn('player-1', 25 * map.width + 25).accepted, true);
+  engine.finalizeSpawnPhase();
+
+  assert.equal(engine.requestNuke('player-1', 10).accepted, true);
+  assert.equal(engine.requestNuke('player-1', 11).accepted, true);
+  assert.equal(engine.requestNuke('player-1', 12).accepted, true);
+  assert.deepEqual(engine.requestNuke('player-1', 13), {
+    accepted: false,
+    reason: 'NUKE_LIMIT_REACHED'
+  });
+});
+
+test('neutral attacks use one indexed fixed schedule', async () => {
+  const map = createLandMap(50, 50);
+  const engine = new GameEngine('attack-index-test', map);
+  await engine.addPlayer('Tester', 'player-1');
+  engine.startSpawnPhase(100000);
+  assert.equal(engine.selectSpawn('player-1', 25 * map.width + 25).accepted, true);
+  engine.finalizeSpawnPhase();
+
+  const target = 25 * map.width + 28;
+  const first = engine.requestExpansion('player-1', target, 100);
+  assert.equal(first.accepted, true);
+  const attack = engine.expansionManager.neutralAttackByOwner.get('player-1');
+  assert.ok(attack);
+  assert.equal(engine.expansionManager.attacks.size, 1);
+  assert.equal(attack.tileQueue.length, 135);
+
+  const reinforcement = engine.expansionManager.reinforceNeutralAttack('player-1', 100);
+  assert.equal(reinforcement.accepted, true);
+  assert.equal(reinforcement.attackId, attack.id);
+  assert.equal(engine.expansionManager.attacks.size, 1);
+  assert.equal(engine.expansionManager.neutralAttackByOwner.get('player-1'), attack);
+});
+
+test('random spawn is confirmed before active expansion', async () => {
+  const map = createLandMap(50, 50);
+  const engine = new GameEngine('random-spawn-test', map);
+  await engine.addPlayer('Tester', 'player-1');
+  engine.startSpawnPhase(100000);
+
+  const spawn = engine.submitSpawn('player-1', 0xffffffff);
+  assert.equal(spawn.accepted, true);
+  assert.ok(Number.isInteger(spawn.position));
+  assert.ok(Number.isInteger(engine.players.get('player-1').spawnPosition));
+  engine.finalizeSpawnPhase();
+
+  const player = engine.players.get('player-1');
+  const expansionTarget = player.spawnPosition + 3;
+  const expansion = engine.requestExpansion('player-1', expansionTarget, 100);
+  assert.equal(expansion.accepted, true);
 });

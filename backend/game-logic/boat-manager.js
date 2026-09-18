@@ -301,7 +301,10 @@ class BoatManager {
       if (boat.index < boat.route.length) continue;
 
       const landed = this.land(boat);
-      if (landed) changes.push(landed);
+      if (landed) {
+        changes.push({ position: landed.position, owner: landed.owner });
+        for (const position of landed.releasedPositions || []) changes.push({ position, owner: 0 });
+      }
       finished.push(boat);
     }
 
@@ -332,8 +335,14 @@ class BoatManager {
       if (defender) defender.troops = Math.max(0, defender.troops - Math.ceil(cost / 2));
       this.territory.removeOwnerCells(defenderId, [landing]);
     }
+    let releasedPositions = [];
+    if (defenderId && (this.territory.getTerritorySize(defenderId) === 0 || this.territory.shouldEliminate(defenderId))) {
+      releasedPositions = this.territory.releaseOwner(defenderId);
+      this.expansionManager.cancelEliminatedPlayer(defenderId);
+    }
     this.map.owners[landing] = ownerId;
     this.territory.registerOwner(ownerId, [landing]);
+    this.territory.notifyChange(landing, ownerId, defenderId);
 
     const survivors = troops - cost;
     if (player && survivors > 0) {
@@ -344,7 +353,7 @@ class BoatManager {
         this.frontFrom(landing, ownerId)
       );
     }
-    return { position: landing, owner: ownerId };
+    return { position: landing, owner: ownerId, releasedPositions };
   }
 
   landingCost(landing, defenderId) {

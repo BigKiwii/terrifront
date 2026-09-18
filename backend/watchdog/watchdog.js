@@ -1,5 +1,6 @@
 const TokenBucket = require('./token-bucket');
 const defaultConfig = require('./watchdog-config');
+const runtimeMetrics = require('../diagnostics/runtime-metrics');
 
 class WatchDog {
   constructor(config = {}, now = () => Date.now()) {
@@ -10,6 +11,7 @@ class WatchDog {
   }
 
   accept(socket, address) {
+    runtimeMetrics.increment('websocketConnections');
     const currentTime = this.now();
     const entry = this.ipConnections.get(address) || { count: 0, windowStartedAt: currentTime };
     if (currentTime - entry.windowStartedAt >= this.config.connectionWindowMs) {
@@ -48,6 +50,8 @@ class WatchDog {
     const state = this.connections.get(socket);
     if (!state) return false;
     const size = this.getPayloadSize(payload);
+    runtimeMetrics.increment('websocketMessages');
+    runtimeMetrics.increment('websocketBytesIn', size);
     return size <= this.config.maxPayloadBytes &&
       state.inboundMessages.consume() &&
       state.inboundBytes.consume(size);
@@ -58,6 +62,7 @@ class WatchDog {
     if (!state || socket.readyState !== 1) return false;
     const size = this.getPayloadSize(payload);
     if (size > this.config.maxPayloadBytes || !state.outboundBytes.consume(size)) return false;
+    runtimeMetrics.increment('websocketBytesOut', size);
     socket.send(payload);
     return true;
   }

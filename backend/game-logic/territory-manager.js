@@ -7,6 +7,15 @@ class TerritoryManager {
     this.eliminationBases = new Map();
     this.tileGrades = new Uint8Array(map.cellCount);
     this.gradesInitialized = false;
+    this.changeHandler = null;
+  }
+
+  setChangeHandler(changeHandler) {
+    this.changeHandler = changeHandler;
+  }
+
+  notifyChange(position, ownerId, previousOwnerId = 0) {
+    this.changeHandler?.({ position, ownerId, previousOwnerId });
   }
 
   getOwner(position) {
@@ -78,6 +87,7 @@ class TerritoryManager {
       }
       this.refreshBorder(position, ownerId);
       borders.delete(position);
+      this.notifyChange(position, 0, ownerId);
     }
     this.territorySizes.set(ownerId, Math.max(0, (this.territorySizes.get(ownerId) ?? 0) - cells.length));
   }
@@ -86,12 +96,14 @@ class TerritoryManager {
     const affectedPositions = new Set();
     const affectedOwners = new Set();
     const destroyedByOwner = new Map();
+    const destroyedChanges = [];
     for (const position of cells) {
       const ownerId = this.map.owners[position];
       affectedPositions.add(position);
       for (const neighbor of this.map.getNeighbors(position)) affectedPositions.add(neighbor);
       if (!ownerId) continue;
       affectedOwners.add(ownerId);
+      destroyedChanges.push({ position, previousOwnerId: ownerId });
       destroyedByOwner.set(ownerId, (destroyedByOwner.get(ownerId) || 0) + 1);
       this.map.owners[position] = 0;
       this.ownedCells.get(ownerId)?.delete(position);
@@ -115,6 +127,7 @@ class TerritoryManager {
       if (!this.territorySizes.get(ownerId)) continue;
       for (const position of affectedPositions) this.refreshBorder(position, ownerId);
     }
+    for (const change of destroyedChanges) this.notifyChange(change.position, 0, change.previousOwnerId);
     return destroyedByOwner;
   }
 
@@ -198,6 +211,7 @@ class TerritoryManager {
       this.refreshBorder(position, affectedOwner);
       for (const neighbor of neighbors) this.refreshBorder(neighbor, affectedOwner);
     }
+    this.notifyChange(position, attackerId, defenderId);
     let eliminatedOwnerId = 0;
     let releasedPositions = [];
     if (defenderId !== 0 && this.shouldEliminate(defenderId)) {
@@ -230,6 +244,7 @@ class TerritoryManager {
     this.territorySizes.set(ownerId, 0);
     this.borderTiles.delete(ownerId);
     this.ownedCells.delete(ownerId);
+    for (const position of releasedPositions) this.notifyChange(position, 0, ownerId);
     return releasedPositions;
   }
 

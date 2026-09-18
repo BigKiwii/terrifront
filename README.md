@@ -55,6 +55,25 @@ On Windows PowerShell:
 $env:PORT = 8081; npm start
 ```
 
+To run a local multiplayer load sample and write `report.txt`:
+
+```powershell
+npm run profile
+```
+
+The profiler starts a temporary server, connects several binary WebSocket clients, exercises the lobby and spawn flow, samples CPU, memory, event-loop delay, network traffic, and per-game simulation timings, then writes `report.txt`. Configure it with `PROFILE_CLIENTS`, `PROFILE_DURATION_MS`, `PROFILE_PORT`, `PROFILE_LOBBY_MS`, and `PROFILE_SPAWN_MS`.
+
+For concurrent-match scaling, create sequential lobby batches while earlier matches remain active:
+
+```powershell
+$env:PROFILE_MATCHES = 4
+$env:PROFILE_CLIENTS = 4
+$env:PROFILE_DURATION_MS = 15000
+npm run profile
+```
+
+The report includes aggregate tick time, attack-time share, memory growth, and per-game peaks for each match. `PROFILE_RANDOM_SEED` controls the diagnostic server's seeded random stream so repeated benchmark runs use the same workload decisions.
+
 ## How To Play
 
 1. Enter a name and press **Singleplayer**.
@@ -63,9 +82,9 @@ $env:PORT = 8081; npm start
 4. Choose an expansion or boat action, then set the troop ratio.
 5. Grow your territory, protect your borders, and outlast the other players.
 
-## Multiplayer (Disabled)
+## Multiplayer
 
-Multiplayer and WebSocket connection code is retained in the repository, but the public homepage does not start or use it while server capacity is unavailable. The primary client path is offline Singleplayer, including the same territory, attack, boat, economy, and bot mechanics. Multiplayer can be re-enabled later without removing the preserved server implementation.
+The homepage now exposes a Multiplayer launch button. It connects to the local WebSocket server, requests the current rolling lobby, and enters the shared server-authoritative match when the lobby rotates.
 
 ## Multiplayer Architecture (Retained)
 

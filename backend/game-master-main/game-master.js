@@ -1,6 +1,6 @@
 const GameEngine = require('./game-engine');
 const { BOT_NAMES } = require('../game-logic/bot-manager');
-const { BOT_COUNT } = require('../../shared/game-rules');
+const { BOT_COUNT, SIMULATION_TICK_MS } = require('../../shared/game-rules');
 
 class GameMaster {
   constructor() {
@@ -29,11 +29,16 @@ class GameMaster {
     this.games.set(gameId, engine);
     const acceptedPlayers = new Map();
 
-    for (const lobbyPlayer of lobby.players.values()) {
-      const game = await engine.addPlayer(lobbyPlayer.playerName, lobbyPlayer.playerId, false);
-      this.players.set(lobbyPlayer.playerId, { gameId, engine });
-      acceptedPlayers.set(lobbyPlayer.playerId, game);
-      this.nextPlayerNumber = Math.max(this.nextPlayerNumber, Number(lobbyPlayer.playerId.replace('player-', '')) + 1);
+    try {
+      for (const lobbyPlayer of lobby.players.values()) {
+        const game = await engine.addPlayer(lobbyPlayer.playerName, lobbyPlayer.playerId, false);
+        this.players.set(lobbyPlayer.playerId, { gameId, engine });
+        acceptedPlayers.set(lobbyPlayer.playerId, game);
+        this.nextPlayerNumber = Math.max(this.nextPlayerNumber, Number(lobbyPlayer.playerId.replace('player-', '')) + 1);
+      }
+    } catch (error) {
+      this.removeGame(gameId);
+      throw error;
     }
 
     const spawnPhase = engine.startSpawnPhase();
@@ -85,7 +90,7 @@ class GameMaster {
       const selected = engine.selectSpawn(playerId, position);
       if (selected.accepted) engine.players.get(playerId).capitalColor = '#8b9298';
     }
-    return engine.getState();
+    return null;
   }
 
   removeGame(gameId) {
@@ -93,9 +98,9 @@ class GameMaster {
     if (!game) return false;
     this.games.delete(gameId);
     for (const playerId of game.players.keys()) {
-      if (game.phase === 'SPAWNING') game.releasePlayer(playerId);
       this.players.delete(playerId);
     }
+    game.close();
     return true;
   }
 
@@ -126,7 +131,7 @@ class GameMaster {
     return player.engine.requestNuke(playerId, targetPosition);
   }
 
-  startTicker(onUpdate, onGameStarted = () => {}) {
+  startTicker(onUpdate, onGameStarted = () => {}, onGameFinished = () => {}) {
     if (this.tickHandle) return;
     this.tickHandle = setInterval(() => {
       for (const game of this.games.values()) {
@@ -134,8 +139,11 @@ class GameMaster {
         const state = game.finalizeSpawnPhase();
         if (state) onGameStarted(state);
       }
-      for (const update of this.tick()) onUpdate(update);
-    }, 50);
+      for (const update of this.tick()) {
+        onUpdate(update);
+        if (this.games.get(update.gameId)?.phase === 'FINISHED') onGameFinished(update.gameId);
+      }
+    }, SIMULATION_TICK_MS);
   }
 
   stopTicker() {

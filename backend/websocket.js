@@ -2,6 +2,7 @@ const fs = require('fs');
 const http = require('http');
 const path = require('path');
 const zlib = require('zlib');
+const metricsFs = require('fs');
 const WebSocket = require('ws');
 const {
   OP,
@@ -18,8 +19,16 @@ const {
 const GameMaster = require('./game-master-main/game-master');
 const LobbyManager = require('./multiplayer/lobby-manager');
 const WatchDog = require('./watchdog/watchdog');
+const runtimeMetrics = require('./diagnostics/runtime-metrics');
 
 const port = Number(process.env.PORT || 8080);
+if (process.env.TERRIFRONT_RANDOM_SEED) {
+  let randomState = Number(process.env.TERRIFRONT_RANDOM_SEED) >>> 0;
+  Math.random = () => {
+    randomState = (randomState * 1664525 + 1013904223) >>> 0;
+    return randomState / 0x100000000;
+  };
+}
 const root = path.resolve(__dirname, '..');
 const fileCache = new Map();
 const gzipCache = new Map();
@@ -104,6 +113,24 @@ const gameSockets = new Map();
 const lobbySockets = new Map();
 const lobbyObservers = new Set();
 const lobbyBroadcastTimers = new Map();
+const metricsFile = process.env.TERRIFRONT_METRICS_FILE;
+
+function writeMetrics() {
+  if (!metricsFile) return;
+  metricsFs.writeFileSync(metricsFile, JSON.stringify(runtimeMetrics.snapshot(), null, 2));
+}
+
+const metricsTimer = metricsFile ? setInterval(writeMetrics, 1000) : null;
+process.once('SIGINT', () => {
+  if (metricsTimer) clearInterval(metricsTimer);
+  writeMetrics();
+  process.exit(0);
+});
+process.once('SIGTERM', () => {
+  if (metricsTimer) clearInterval(metricsTimer);
+  writeMetrics();
+  process.exit(0);
+});
 
 function broadcastLobby(lobby) {
   const previousTimer = lobbyBroadcastTimers.get(lobby.lobbyId);
@@ -122,7 +149,20 @@ function broadcastLobby(lobby) {
 }
 
 async function startLobbyMatch(lobby) {
-  const match = await gameMaster.createMatch(lobby);
+  let match;
+  try {
+    match = await gameMaster.createMatch(lobby);
+  } catch (error) {
+    const sockets = lobbySockets.get(lobby.lobbyId) || new Set();
+    lobbySockets.delete(lobby.lobbyId);
+    for (const socket of sockets) {
+      socket.lobbyId = null;
+      if (socket.readyState === WebSocket.OPEN) {
+        watchDog.send(socket, encodeRejected(OP.GAME_REJECTED, 'MAP_LOAD_FAILED'));
+      }
+    }
+    throw error;
+  }
   const sockets = lobbySockets.get(lobby.lobbyId) || new Set();
   lobbySockets.delete(lobby.lobbyId);
   gameSockets.set(match.gameId, sockets);
@@ -308,9 +348,14 @@ server.on('connection', (socket) => {
       const lobby = lobbyManager.getLobbyForPlayer(socket.playerId);
       lobbyManager.leave(socket.playerId);
       lobbySockets.get(socket.lobbyId)?.delete(socket);
+      if (lobbySockets.get(socket.lobbyId)?.size === 0) lobbySockets.delete(socket.lobbyId);
       if (lobby) broadcastLobby(lobby);
     }
-    if (socket.gameId) gameSockets.get(socket.gameId)?.delete(socket);
+    if (socket.gameId) {
+      const sockets = gameSockets.get(socket.gameId);
+      sockets?.delete(socket);
+      if (sockets?.size === 0) gameSockets.delete(socket.gameId);
+    }
   });
 });
 
@@ -323,7 +368,9 @@ gameMaster.startTicker((update) => {
   for (const socket of sockets) {
     if (socket.readyState !== WebSocket.OPEN) continue;
     const playerAttacks = update.activeAttacks?.filter((attack) => attack.playerId === socket.playerId) || [];
-    watchDog.send(socket, encodeGameUpdate({ ...update, activeAttacks: playerAttacks }));
+    const payload = encodeGameUpdate({ ...update, activeAttacks: playerAttacks });
+    runtimeMetrics.increment('encodedUpdates');
+    if (!watchDog.send(socket, payload)) runtimeMetrics.increment('droppedUpdates');
   }
 }, (state) => {
   const sockets = gameSockets.get(state.gameId) || new Set();
@@ -331,6 +378,11 @@ gameMaster.startTicker((update) => {
   for (const socket of sockets) {
     if (socket.readyState === WebSocket.OPEN) watchDog.send(socket, payload);
   }
+}, (gameId) => {
+  setTimeout(() => {
+    gameMaster.removeGame(gameId);
+    gameSockets.delete(gameId);
+  }, 30000);
 });
 
 staticServer.listen(port, () => {

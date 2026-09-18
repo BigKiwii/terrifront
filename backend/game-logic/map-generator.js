@@ -31,46 +31,33 @@ function loadMap() {
 }
 
 function cloneMap(source) {
-  return createMap(source.terrain, source.width, source.height, source.expansionTimes);
+  return createMap(source.terrain, source.width, source.height, source.expansionTimes, source.topology);
 }
 
-function createMap(sourceTerrain, width, height, sourceExpansionTimes) {
+function createMap(sourceTerrain, width, height, sourceExpansionTimes, sourceTopology = null) {
   const cellCount = width * height;
-  const terrain = Uint8Array.from(sourceTerrain);
-  const conquerableTerrainCount = terrain.reduce((count, value) => count + ((value & TERRAIN_LAND) !== 0 ? 1 : 0), 0);
+  const topology = sourceTopology || createTopology(sourceTerrain, width, height, sourceExpansionTimes);
   const owners = new Int32Array(cellCount);
-  const expansionTimes = sourceExpansionTimes
-    ? Uint8Array.from(sourceExpansionTimes)
-    : new Uint8Array(cellCount).fill(50);
-  const neighborTable = new Array(cellCount);
-  for (let position = 0; position < cellCount; position += 1) {
-    const x = position % width;
-    const neighbors = [];
-    if (x > 0) neighbors.push(position - 1);
-    if (x < width - 1) neighbors.push(position + 1);
-    if (position >= width) neighbors.push(position - width);
-    if (position < cellCount - width) neighbors.push(position + width);
-    neighborTable[position] = neighbors;
-  }
 
   return {
     mapId: MAP_ID,
     width,
     height,
     cellCount,
-    conquerableTerrainCount,
+    conquerableTerrainCount: topology.conquerableTerrainCount,
     backgroundAsset: 'map/europ-asia-map.webp',
-    terrain,
+    terrain: topology.terrain,
     owners,
-    expansionTimes,
+    expansionTimes: topology.expansionTimes,
+    topology,
     getTerrain(position) {
-      return terrain[position] ?? TERRAIN_WATER;
+      return topology.terrain[position] ?? TERRAIN_WATER;
     },
     isLand(position) {
-      return (terrain[position] & TERRAIN_LAND) !== 0;
+      return (topology.terrain[position] & TERRAIN_LAND) !== 0;
     },
     getNeighbors(position) {
-      return neighborTable[position] || [];
+      return topology.neighborTable[position] || [];
     },
     getCapitalCells(centerPosition) {
       const centerX = centerPosition % width;
@@ -93,11 +80,35 @@ function createMap(sourceTerrain, width, height, sourceExpansionTimes) {
         backgroundAsset: 'map/europ-asia-map.webp',
         terrainUrl: '/map/map.bin',
         terrainEncoding: 'packed-u8',
-        terrainLength: terrain.length,
+        terrainLength: topology.terrain.length,
         expansionTimesUrl: '/map/expansion-times.bin',
         ownersEncoding: 'sparse-updates'
       };
     }
+  };
+}
+
+function createTopology(sourceTerrain, width, height, sourceExpansionTimes) {
+  const terrain = Uint8Array.from(sourceTerrain);
+  const cellCount = width * height;
+  const expansionTimes = sourceExpansionTimes
+    ? Uint8Array.from(sourceExpansionTimes)
+    : new Uint8Array(cellCount).fill(50);
+  const neighborTable = new Array(cellCount);
+  for (let position = 0; position < cellCount; position += 1) {
+    const x = position % width;
+    const neighbors = [];
+    if (x > 0) neighbors.push(position - 1);
+    if (x < width - 1) neighbors.push(position + 1);
+    if (position >= width) neighbors.push(position - width);
+    if (position < cellCount - width) neighbors.push(position + width);
+    neighborTable[position] = neighbors;
+  }
+  return {
+    terrain,
+    expansionTimes,
+    neighborTable,
+    conquerableTerrainCount: terrain.reduce((count, value) => count + ((value & TERRAIN_LAND) !== 0 ? 1 : 0), 0)
   };
 }
 

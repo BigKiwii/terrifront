@@ -17,6 +17,9 @@ class ExpansionManager {
     this.players = players;
     this.attacks = new Map();
     this.attacksByOwner = new Map();
+    this.neutralAttackByOwner = new Map();
+    this.attackByOwnerAndTarget = new Map();
+    this.attacksByTarget = new Map();
     this.nextAttackId = 1;
     this.activeAttacksCache = [];
     this.activeAttacksDirty = true;
@@ -24,6 +27,11 @@ class ExpansionManager {
     // when these were declared at module scope and shared by all game instances.
     this._tickChanges = [];
     this._attacksToFinish = [];
+    this.boatManager = null;
+  }
+
+  attachBoatManager(boatManager) {
+    this.boatManager = boatManager;
   }
 
   // `frontTiles` limits which of the player's own tiles the attack radiates
@@ -42,9 +50,7 @@ class ExpansionManager {
   reinforceNeutralAttack(playerId, power = 100) {
     const player = this.players.get(playerId);
     if (!player) return { accepted: false, reason: 'PLAYER_NOT_FOUND' };
-    const attack = [...this.attacks.values()].find((activeAttack) =>
-      activeAttack.playerId === playerId && activeAttack.targetOwnerId === 0
-    );
+    const attack = this.neutralAttackByOwner.get(playerId);
     if (!attack) return { accepted: false, reason: 'NO_ACTIVE_NEUTRAL_ATTACK' };
     const normalizedPower = Math.max(0, Math.min(MAX_POWER, Number(power) || 0));
     const troops = Math.min(player.troops, Math.floor(player.troops * normalizedPower / MAX_POWER));
@@ -69,11 +75,9 @@ class ExpansionManager {
     const targetOwnerId = targetPosition === null ? 0 : this.map.owners[targetPosition] || 0;
 
     // Merge key: for player attacks use targetOwnerId; for neutral use targetPosition.
-    const existingAttack = [...this.attacks.values()].find((activeAttack) => {
-      if (activeAttack.playerId !== playerId) return false;
-      if (targetOwnerId !== 0) return activeAttack.targetOwnerId === targetOwnerId;
-      return activeAttack.targetOwnerId === 0 && activeAttack.targetPosition === targetPosition;
-    });
+    const existingAttack = targetOwnerId === 0
+      ? this.neutralAttackByOwner.get(playerId)
+      : this.attackByOwnerAndTarget.get(this.getAttackKey(ownerId, targetOwnerId));
 
     if (existingAttack) {
       player.troops = Math.max(0, player.troops - exactTroops);
@@ -82,8 +86,8 @@ class ExpansionManager {
       // then clear and reschedule all pending tiles with updated troop count.
       existingAttack.borderTiles = new Set(this.territory.getBorderSet(ownerId));
       const pendingTiles = [];
-      for (const slotTiles of existingAttack.tileQueue.values()) pendingTiles.push(...slotTiles);
-      existingAttack.tileQueue.clear();
+      for (const slotTiles of existingAttack.tileQueue) pendingTiles.push(...slotTiles);
+      existingAttack.tileQueue.forEach((slotTiles) => { slotTiles.length = 0; });
       existingAttack.scheduledTiles = 0;
       existingAttack.queued.clear();
       const mergedCandidates = new Set(pendingTiles);
@@ -98,7 +102,7 @@ class ExpansionManager {
       ownerId,
       targetOwnerId,
       troops: exactTroops,
-      tileQueue: new Map(),
+      tileQueue: Array.from({ length: MAX_SCHEDULE_TICKS }, () => []),
       queueSlot: 0,
       scheduledTiles: 0,
       queued: new Set(),
@@ -128,8 +132,8 @@ class ExpansionManager {
     tickChanges.length = 0;
     attacksToFinish.length = 0;
     for (const attack of this.attacks.values()) {
-      const currentSlot = attack.tileQueue.get(attack.queueSlot);
-      if (currentSlot) attack.tileQueue.delete(attack.queueSlot);
+      const currentSlot = attack.tileQueue[attack.queueSlot];
+      attack.tileQueue[attack.queueSlot] = [];
       // Do NOT reset frontierDirty here — getAttackCandidates (called below)
       // reads it to decide whether to rebuild the border copy. It is cleared
       // after that call so it is fresh for the next tick.
@@ -140,6 +144,7 @@ class ExpansionManager {
         if (!this.isTargetTile(position, attack) || !this.map.isLand(position)) continue;
         if (!this.map.getNeighbors(position).some((neighbor) => this.map.owners[neighbor] === attack.ownerId)) continue;
 
+        const previousOwnerId = this.map.owners[position];
         const result = this.territory.attackTile(position, attack.ownerId, attack.troops, this.players);
         if (!result.success) continue;
         if (attack.troops < result.attackerLoss) {
@@ -147,35 +152,28 @@ class ExpansionManager {
           break;
         }
         attack.troops -= result.attackerLoss;
-        attack.frontierDirty = true;
-        this.markOwnerFrontiersDirty(attack.ownerId);
         tickChanges.push({ position, owner: attack.ownerId });
         if (result.wastelandCleared) wastelandChanges.push({ position, value: 0 });
         for (const releasedPosition of result.releasedPositions || []) {
           tickChanges.push({ position: releasedPosition, owner: 0 });
         }
-        this.refreshAttackBorder(attack, position);
         if (result.eliminatedOwnerId) {
+          const targetKey = this.getAttackKey(attack.ownerId, attack.targetOwnerId);
+          if (this.attackByOwnerAndTarget.get(targetKey) === attack) this.attackByOwnerAndTarget.delete(targetKey);
+          this.removeTargetIndex(attack);
           attack.targetOwnerId = 0;
           attack.targetPosition = null;
           attack.neutralMomentum = true;
+          this.neutralAttackByOwner.set(attack.playerId, attack);
           this.requeueNeutralFrontier(attack, result.releasedPositions || []);
           this.cancelEliminatedPlayer(result.eliminatedOwnerId);
         }
-        const frontier = [];
-        for (const neighbor of this.map.getNeighbors(position)) {
-          if (this.isTargetTile(neighbor, attack) && !attack.queued.has(neighbor)) frontier.push(neighbor);
-        }
-        this.scheduleCandidates(attack, frontier);
       }
 
-      if (attack.frontierDirty || attack.scheduledTiles === 0) {
-        this.scheduleCandidates(attack, this.getAttackCandidates(attack));
-      }
-      // Clear after getAttackCandidates has had a chance to read the flag.
+      if (attack.frontierDirty) this.scheduleCandidates(attack, this.getAttackCandidates(attack));
       attack.frontierDirty = false;
       attack.queueSlot = (attack.queueSlot + 1) % MAX_SCHEDULE_TICKS;
-      if (attack.troops <= 0 || (attack.scheduledTiles <= 0 && attack.tileQueue.size === 0)) attacksToFinish.push(attack);
+      if (attack.troops <= 0 || attack.scheduledTiles <= 0) attacksToFinish.push(attack);
     }
     for (const attack of attacksToFinish) this.finishAttack(attack);
     tickChanges.wastelandChanges = wastelandChanges;
@@ -195,6 +193,7 @@ class ExpansionManager {
     if (toDelete.length > 0) this.activeAttacksDirty = true;
     const player = this.players.get(`player-${ownerId}`);
     if (player) player.troops = 0;
+    this.boatManager?.releaseOwner(ownerId);
   }
 
   stopAllAttacks() {
@@ -204,12 +203,15 @@ class ExpansionManager {
     }
     this.attacks.clear();
     this.attacksByOwner.clear();
+    this.neutralAttackByOwner.clear();
+    this.attackByOwnerAndTarget.clear();
+    this.attacksByTarget.clear();
     this.activeAttacksDirty = true;
   }
 
   requeueNeutralFrontier(attack, releasedPositions) {
     const released = new Set(releasedPositions);
-    for (const queue of attack.tileQueue.values()) {
+    for (const queue of attack.tileQueue) {
       let write = 0;
       for (let index = 0; index < queue.length; index += 1) {
         if (released.has(queue[index])) {
@@ -274,11 +276,7 @@ class ExpansionManager {
       const momentum = attack.neutralMomentum ? 0.6 : 1;
       const delayTicks = Math.max(1, Math.floor(expansionTime * (0.08 - 0.02 * Math.min(3, contacts) + jitter) * speedFactor * momentum));
       const slot = (attack.queueSlot + delayTicks) % MAX_SCHEDULE_TICKS;
-      let slotQueue = attack.tileQueue.get(slot);
-      if (!slotQueue) {
-        slotQueue = [];
-        attack.tileQueue.set(slot, slotQueue);
-      }
+      const slotQueue = attack.tileQueue[slot];
       slotQueue.push(position);
       attack.scheduledTiles += 1;
     }
@@ -348,6 +346,17 @@ class ExpansionManager {
       this.attacksByOwner.set(attack.ownerId, ownerAttacks);
     }
     ownerAttacks.add(attack);
+    if (attack.targetOwnerId === 0) {
+      this.neutralAttackByOwner.set(attack.playerId, attack);
+    } else {
+      this.attackByOwnerAndTarget.set(this.getAttackKey(attack.ownerId, attack.targetOwnerId), attack);
+      let targetAttacks = this.attacksByTarget.get(attack.targetOwnerId);
+      if (!targetAttacks) {
+        targetAttacks = new Set();
+        this.attacksByTarget.set(attack.targetOwnerId, targetAttacks);
+      }
+      targetAttacks.add(attack);
+    }
   }
 
   unindexAttack(attack) {
@@ -355,6 +364,24 @@ class ExpansionManager {
     if (!ownerAttacks) return;
     ownerAttacks.delete(attack);
     if (ownerAttacks.size === 0) this.attacksByOwner.delete(attack.ownerId);
+    if (attack.targetOwnerId === 0) {
+      if (this.neutralAttackByOwner.get(attack.playerId) === attack) this.neutralAttackByOwner.delete(attack.playerId);
+    } else {
+      const key = this.getAttackKey(attack.ownerId, attack.targetOwnerId);
+      if (this.attackByOwnerAndTarget.get(key) === attack) this.attackByOwnerAndTarget.delete(key);
+      this.removeTargetIndex(attack);
+    }
+  }
+
+  removeTargetIndex(attack) {
+    const targetAttacks = this.attacksByTarget.get(attack.targetOwnerId);
+    if (!targetAttacks) return;
+    targetAttacks.delete(attack);
+    if (targetAttacks.size === 0) this.attacksByTarget.delete(attack.targetOwnerId);
+  }
+
+  getAttackKey(ownerId, targetOwnerId) {
+    return `${ownerId}:${targetOwnerId}`;
   }
 
   markOwnerFrontiersDirty(ownerId) {
@@ -363,6 +390,35 @@ class ExpansionManager {
 
   markAllFrontiersDirty() {
     for (const attack of this.attacks.values()) attack.frontierDirty = true;
+  }
+
+  handleTerritoryChange({ position, ownerId, previousOwnerId = 0 }) {
+    const affectedPositions = [position, ...this.map.getNeighbors(position)];
+    for (const attack of this.attacksByOwner.get(ownerId) || []) {
+      this.refreshAttackBorder(attack, position);
+      const candidates = [];
+      for (const neighbor of this.map.getNeighbors(position)) {
+        if (this.isTargetTile(neighbor, attack) && !attack.queued.has(neighbor)) candidates.push(neighbor);
+      }
+      this.scheduleCandidates(attack, candidates);
+    }
+    if (previousOwnerId && previousOwnerId !== ownerId) {
+      for (const attack of this.attacksByOwner.get(previousOwnerId) || []) {
+        const candidates = [];
+        for (const affectedPosition of affectedPositions) {
+          this.refreshAttackBorder(attack, affectedPosition);
+          for (const neighbor of this.map.getNeighbors(affectedPosition)) {
+            if (this.isTargetTile(neighbor, attack) && !attack.queued.has(neighbor)) candidates.push(neighbor);
+          }
+        }
+        this.scheduleCandidates(attack, candidates);
+      }
+    }
+    for (const attack of this.attacksByTarget.get(ownerId) || []) {
+      if (this.isTargetTile(position, attack) && !attack.queued.has(position)) {
+        this.scheduleCandidates(attack, [position]);
+      }
+    }
   }
 
   cancel(playerId) {
