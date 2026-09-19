@@ -162,8 +162,27 @@
     tickHandle = setTimeout(() => {
       if (!engine) return;
       const tickStartedAt = performance.now();
-      const update = engine.tick();
+      let update = null;
+      try {
+        update = engine.tick();
+      } catch (error) {
+        console.error('[TerriFront worker] Tick failed', {
+          tickCount: engine.tickCount,
+          message: error.message,
+          stack: error.stack
+        });
+        self.postMessage({ type: 'ERROR', message: `Offline tick failed: ${error.message}` });
+        clearTimers();
+        return;
+      }
       const tickDurationMs = performance.now() - tickStartedAt;
+      if (engine.tickCount % 100 === 0) {
+        console.debug('[TerriFront worker] Tick heartbeat', {
+          tickCount: engine.tickCount,
+          emittedUpdate: Boolean(update),
+          playerCount: update?.players?.length || 0
+        });
+      }
       if (tickDurationMs >= SLOW_TICK_WARN_MS) {
         self.postMessage({ type: 'PERF', payload: { kind: 'offline-tick', durationMs: Math.round(tickDurationMs * 10) / 10, tickCount: engine.tickCount } });
       }
@@ -176,6 +195,13 @@
         const playersBuf    = encodePlayersList(update.players);
         const wastelandBuf  = encodeWastelandList(update.wastelandChanges);
         const boatsBuf      = encodeBoatsList(update.boats);
+        if (playersBuf) {
+          console.info('[TerriFront worker] Player buffer emitted', {
+            tickCount: update.tickCount,
+            playerCount: update.players.length,
+            firstPlayerTroops: update.players[0]?.troops
+          });
+        }
 
         // Build a lean scalar-only payload — no object arrays at all.
         const payload = {
