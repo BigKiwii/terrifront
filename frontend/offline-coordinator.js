@@ -81,11 +81,14 @@
         TerriGameUI.confirmSpawn(message.payload);
         break;
       case 'ACTIVE_GAME':
+        {
+          const activePlayers = decodePlayers(message.playersBuf);
         TerriGameUI.startActiveGame({
           ...message.payload,
-          players: decodePlayers(message.playersBuf) || [...playerMetadata.values()],
+          players: activePlayers.length ? activePlayers : [...playerMetadata.values()],
           changesBuf: message.changesBuf
         });
+        }
         break;
       case 'UPDATE':
         TerriGameUI.applyGameUpdate({

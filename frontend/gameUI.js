@@ -1030,7 +1030,7 @@
       updateRatioDisplay();
       leaderboard.hidden = false;
       spawnMessage.textContent = 'GAME ACTIVE // CAPITAL SECURED';
-      if (data.players) {
+      if (data.players?.length) {
         gameData.players = data.players;
         rebuildPlayerMap();
         data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
