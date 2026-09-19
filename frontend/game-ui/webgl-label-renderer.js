@@ -32,6 +32,8 @@ void main() {
   let cachedGameData = null;
   let cachedTerritoryVersion = -1;
   let cachedSquares = new Map();
+  let squareScanAt = -Infinity;
+  const SQUARE_SCAN_INTERVAL_MS = 2000;
   let labelCanvas = null;
   let gl = null;
   let program = null;
@@ -45,6 +47,8 @@ void main() {
   let mapBounds = null;
   let lastDrawState = null;
   let atlasMetrics = new Map();
+  let vertexBufferData = new Float32Array(65536);
+  let vertexCount = 0;
   const MIN_LABEL_PIXELS = 1;
   const ATLAS_WIDTH = 1280;
   const ATLAS_HEIGHT = 768;
@@ -121,10 +125,13 @@ void main() {
   function resolveLabelLayout(gameData, territoryVersion) {
     const width = gameData.map.width;
     const height = gameData.map.height;
-    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion) {
+    const now = performance.now();
+    const territoryChanged = gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion;
+    if (territoryChanged && now - squareScanAt >= SQUARE_SCAN_INTERVAL_MS) {
       cachedSquares = largestOwnedSquares(gameData.owners, width, height);
       cachedGameData = gameData;
       cachedTerritoryVersion = territoryVersion;
+      squareScanAt = now;
     }
     if (!mapBounds) mapBounds = mapCanvas.getBoundingClientRect();
     const scaleX = mapBounds.width / width;
@@ -148,13 +155,24 @@ void main() {
     return entries;
   }
 
-  function addText(vertices, text, x, y, width, height, baselineBottom) {
+  function ensureVertexCapacity(requiredFloats) {
+    if (requiredFloats <= vertexBufferData.length) return;
+    let capacity = vertexBufferData.length || 65536;
+    while (capacity < requiredFloats) capacity *= 2;
+    const resized = new Float32Array(capacity);
+    resized.set(vertexBufferData);
+    vertexBufferData = resized;
+  }
+
+  function addText(text, x, y, width, height, baselineBottom) {
     const fontSize = Math.max(10, Math.min(18, Math.floor(Math.min(Math.max(10, width - 1) / Math.max(1, text.length * 0.55), Math.max(10, height * 0.22)))));
     const scale = fontSize / 64;
     const metrics = [...text].map((glyph) => atlasMetrics.get(glyph) || atlasMetrics.get(' '));
     const textWidth = metrics.reduce((total, metric) => total + metric.advance * scale, 0);
     let cursorX = x + (width - textWidth) / 2;
     const top = y + height * (baselineBottom ? 0.10 : 0.64);
+    const requiredFloats = vertexCount + text.length * 24;
+    ensureVertexCapacity(requiredFloats);
     for (let index = 0; index < text.length; index += 1) {
       const glyph = atlasMetrics.get(text[index]) || atlasMetrics.get(' ');
       const atlasX = (glyph.index % 16) * GLYPH_WIDTH;
@@ -167,14 +185,14 @@ void main() {
       const u1 = (atlasX + GLYPH_WIDTH) / ATLAS_WIDTH;
       const v0 = 1 - (atlasY + GLYPH_HEIGHT) / ATLAS_HEIGHT;
       const v1 = 1 - atlasY / ATLAS_HEIGHT;
-      vertices.push(
-        left, top, u0, v1,
-        right, top, u1, v1,
-        left, bottom, u0, v0,
-        left, bottom, u0, v0,
-        right, top, u1, v1,
-        right, bottom, u1, v0
-      );
+      const writeIndex = vertexCount;
+      vertexBufferData[writeIndex] = left; vertexBufferData[writeIndex + 1] = top; vertexBufferData[writeIndex + 2] = u0; vertexBufferData[writeIndex + 3] = v1;
+      vertexBufferData[writeIndex + 4] = right; vertexBufferData[writeIndex + 5] = top; vertexBufferData[writeIndex + 6] = u1; vertexBufferData[writeIndex + 7] = v1;
+      vertexBufferData[writeIndex + 8] = left; vertexBufferData[writeIndex + 9] = bottom; vertexBufferData[writeIndex + 10] = u0; vertexBufferData[writeIndex + 11] = v0;
+      vertexBufferData[writeIndex + 12] = left; vertexBufferData[writeIndex + 13] = bottom; vertexBufferData[writeIndex + 14] = u0; vertexBufferData[writeIndex + 15] = v0;
+      vertexBufferData[writeIndex + 16] = right; vertexBufferData[writeIndex + 17] = top; vertexBufferData[writeIndex + 18] = u1; vertexBufferData[writeIndex + 19] = v1;
+      vertexBufferData[writeIndex + 20] = right; vertexBufferData[writeIndex + 21] = bottom; vertexBufferData[writeIndex + 22] = u1; vertexBufferData[writeIndex + 23] = v0;
+      vertexCount += 24;
       cursorX = right;
     }
   }
@@ -186,15 +204,21 @@ void main() {
     mapBounds = bounds;
     const nextState = { version: territoryVersion, left: Math.round(bounds.left), top: Math.round(bounds.top), width: Math.round(bounds.width), height: Math.round(bounds.height), zoom: Number.isFinite(zoom) ? Number(zoom.toFixed(3)) : 1 };
     const entries = resolveLabelLayout(gameData, territoryVersion);
-    const stateChanged = !lastDrawState || JSON.stringify(lastDrawState) !== JSON.stringify(nextState);
+    const stateChanged = !lastDrawState ||
+      lastDrawState.version !== nextState.version ||
+      lastDrawState.left !== nextState.left ||
+      lastDrawState.top !== nextState.top ||
+      lastDrawState.width !== nextState.width ||
+      lastDrawState.height !== nextState.height ||
+      lastDrawState.zoom !== nextState.zoom;
     lastDrawState = nextState;
     if (!stateChanged && entries.length === 0) return;
-    const vertices = [];
+    vertexCount = 0;
     for (const entry of entries) {
       const { player, screenX, screenY, screenWidth, screenHeight, hasCrown } = entry;
-      if (hasCrown) addText(vertices, '♛', screenX, screenY, screenWidth, screenHeight, true);
-      addText(vertices, player.playerName, screenX, screenY, screenWidth, screenHeight, true);
-      addText(vertices, Math.round(Number(player.troops) || 0).toLocaleString('en-US').replace(/,/g, ' '), screenX, screenY, screenWidth, screenHeight, false);
+      if (hasCrown) addText('♛', screenX, screenY, screenWidth, screenHeight, true);
+      addText(player.playerName, screenX, screenY, screenWidth, screenHeight, true);
+      addText(Math.round(Number(player.troops) || 0).toLocaleString('en-US').replace(/,/g, ' '), screenX, screenY, screenWidth, screenHeight, false);
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, labelCanvas.width, labelCanvas.height);
@@ -208,13 +232,13 @@ void main() {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, atlasTexture);
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STREAM_DRAW);
+    gl.bufferData(gl.ARRAY_BUFFER, vertexBufferData.subarray(0, vertexCount), gl.STREAM_DRAW);
     gl.enableVertexAttribArray(positionLocation);
     gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
     gl.enableVertexAttribArray(texCoordLocation);
     gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 16, 8);
     gl.bindVertexArray(null);
-    gl.drawArrays(gl.TRIANGLES, 0, vertices.length / 4);
+    gl.drawArrays(gl.TRIANGLES, 0, vertexCount / 4);
   }
 
   function init(screen, canvas) {
@@ -253,10 +277,13 @@ void main() {
     if (!gameData?.owners || !gameData.players) return null;
     const width = gameData.map.width;
     const height = gameData.map.height;
-    if (gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion) {
+    const now = performance.now();
+    const territoryChanged = gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion;
+    if (territoryChanged && now - squareScanAt >= SQUARE_SCAN_INTERVAL_MS) {
       cachedSquares = largestOwnedSquares(gameData.owners, width, height);
       cachedGameData = gameData;
       cachedTerritoryVersion = territoryVersion;
+      squareScanAt = now;
     }
     const ownerId = Number(String(playerId).replace('player-', ''));
     const square = cachedSquares.get(ownerId);

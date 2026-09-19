@@ -8,6 +8,7 @@
     let lastFrameAt = 0;
     let frameHandle = null;
     let pendingChanges = new Int32Array(0);
+    let appliedBuf = new Int32Array(2048);
     let pendingLength = 0;
     let pendingHead = 0;
     let drainRate = 0;
@@ -45,15 +46,16 @@
       drainCarry -= budget;
       if (remaining <= budget + 1) budget = remaining;
 
-      const applied = new Int32Array(Math.min(budget, remaining) * 2);
+      const needed = Math.min(budget, remaining) * 2;
+      if (needed > appliedBuf.length) appliedBuf = new Int32Array(needed);
       let appliedLength = 0;
       const gameData = options.getGameData();
       while (pendingHead < pendingLength && budget > 0) {
         const position = pendingChanges[pendingHead++];
         const owner = pendingChanges[pendingHead++];
         gameData.owners[position] = owner;
-        applied[appliedLength++] = position;
-        applied[appliedLength++] = owner;
+        appliedBuf[appliedLength++] = position;
+        appliedBuf[appliedLength++] = owner;
         budget -= 1;
       }
       if (pendingHead >= pendingLength) {
@@ -65,7 +67,7 @@
         pendingHead = 0;
       }
       if (appliedLength) {
-        const appliedChanges = applied.subarray(0, appliedLength);
+        const appliedChanges = appliedBuf.subarray(0, appliedLength);
         options.updateWebglOwners(appliedChanges);
         options.updateTerritoryLayer(appliedChanges);
         options.onTerritoryChanged();
