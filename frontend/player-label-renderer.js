@@ -226,5 +226,11 @@
     lastDrawState = null;
   }
 
-  window.TerriPlayerLabelRenderer = { init, draw, getLabelCenter, invalidateLayout };
+  function clear() {
+    if (!labelContext || !labelCanvas) return;
+    labelContext.clearRect(0, 0, labelCanvas.width, labelCanvas.height);
+    invalidateLayout();
+  }
+
+  window.TerriPlayerLabelRenderer = { init, draw, getLabelCenter, invalidateLayout, clear };
 }());

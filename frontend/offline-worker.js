@@ -229,9 +229,7 @@
           gameId:    update.gameId,
           tickCount: update.tickCount,
           winnerId:  update.winnerId ?? null,
-          // activeAttacks omitted: offline mode has no server cancel path
-          // (TerriCommunicator.send is a no-op offline), so sending this
-          // 200-entry object array every tick is pure waste.
+          activeAttacks: update.activeAttacks?.filter((attack) => attack.playerId === HUMAN_ID) || []
         };
 
         // Collect all non-null transferable buffers.

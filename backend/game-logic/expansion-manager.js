@@ -395,6 +395,7 @@ class ExpansionManager {
   handleTerritoryChange({ position, ownerId, previousOwnerId = 0 }) {
     const affectedPositions = [position, ...this.map.getNeighbors(position)];
     for (const attack of this.attacksByOwner.get(ownerId) || []) {
+      attack.frontierDirty = true;
       this.refreshAttackBorder(attack, position);
       const candidates = [];
       for (const neighbor of this.map.getNeighbors(position)) {
@@ -404,6 +405,7 @@ class ExpansionManager {
     }
     if (previousOwnerId && previousOwnerId !== ownerId) {
       for (const attack of this.attacksByOwner.get(previousOwnerId) || []) {
+        attack.frontierDirty = true;
         const candidates = [];
         for (const affectedPosition of affectedPositions) {
           this.refreshAttackBorder(attack, affectedPosition);

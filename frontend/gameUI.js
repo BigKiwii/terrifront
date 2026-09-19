@@ -968,6 +968,7 @@
     },
     start(data) {
       stopRenderLoop();
+      TerriPlayerLabelRenderer.clear?.();
       const sessionId = ++gameSessionId;
       gameData = data;
       nukeFlight = null;
@@ -1267,6 +1268,7 @@
       gameSessionId += 1;
       stopTroopUpdateWatchdog();
       stopRenderLoop();
+      TerriPlayerLabelRenderer.clear?.();
       spawnPhase = null;
       activeGame = false;
       nukeFlight = null;
@@ -1276,6 +1278,9 @@
       setNukeMode(false);
       updateActiveAttacks([]);
       winnerBanner.hidden = true;
+      leaderboard.hidden = true;
+      document.getElementById('selector-stats').hidden = true;
+      attackRatioPanel.hidden = true;
       leaderboardRenderer.reset();
     }
   };
