@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const root = path.resolve(__dirname, '..');
 const frontend = path.join(root, 'frontend');
@@ -86,8 +87,9 @@ function buildOfflineLogicBundle() {
 const offlineLogicBundle = buildOfflineLogicBundle();
 const workerOutputPath = path.join(root, 'dist', 'offline-worker.js');
 const offlineWorkerSource = `${offlineLogicBundle}${offlineWorker}`;
+const workerVersion = crypto.createHash('sha256').update(offlineWorkerSource).digest('hex').slice(0, 12);
 const workerSourceOutputPath = path.join(root, 'dist', 'offline-worker-source.js');
-const embeddedMapData = `<script>window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='offline-worker.js';</script><script src="offline-worker-source.js"></script>`;
+const embeddedMapData = `<script>window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='offline-worker.js?v=${workerVersion}';</script><script src="offline-worker-source.js"></script>`;
 
 const output = html
   .replace('<script src="../shared/binary-protocol.js"></script>', `${embeddedMapData}<script src="../shared/binary-protocol.js"></script>`)
