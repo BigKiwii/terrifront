@@ -10,6 +10,31 @@
   let startResolve = null;
   let startReject = null;
   let preloadReady = null;
+  const PLAYER_STRIDE = 8;
+  let playerMetadata = new Map();
+
+  function decodePlayers(buffer) {
+    if (!buffer) return null;
+    const values = buffer instanceof Int32Array ? buffer : new Int32Array(buffer);
+    const players = [];
+    for (let offset = 0; offset < values.length; offset += PLAYER_STRIDE) {
+      const playerId = `player-${values[offset]}`;
+      const flags = values[offset + 3];
+      const metadata = playerMetadata.get(playerId) || { playerId };
+      players.push({
+        ...metadata,
+        playerId,
+        troops: values[offset + 1],
+        territorySize: values[offset + 2],
+        isBot: Boolean(flags & 1),
+        isAlive: Boolean(flags & 2),
+        isWinner: Boolean(flags & 4),
+        expansionActive: Boolean(flags & 8),
+        spawnPosition: values[offset + 4] < 0 ? null : values[offset + 4]
+      });
+    }
+    return players;
+  }
 
   // Preload map binaries as soon as the coordinator is parsed so they are
   // already in memory (and the browser HTTP cache) when the player clicks Play.
@@ -35,6 +60,7 @@
     workerObjectUrl = null;
     startResolve = null;
     startReject = null;
+    playerMetadata = new Map();
     running = false;
   }
 
@@ -43,6 +69,7 @@
     switch (message.type) {
       case 'START_READY':
         running = true;
+        playerMetadata = new Map((message.payload.spawnPhase.players || []).map((player) => [player.playerId, player]));
         TerriGameUI.start(message.payload.map);
         TerriGameUI.beginSpawnPhase(message.payload.spawnPhase);
         startResolve?.();
@@ -53,10 +80,23 @@
         TerriGameUI.confirmSpawn(message.payload);
         break;
       case 'ACTIVE_GAME':
-        TerriGameUI.startActiveGame({ ...message.payload, changesBuf: message.changesBuf });
+        TerriGameUI.startActiveGame({
+          ...message.payload,
+          players: decodePlayers(message.playersBuf),
+          changesBuf: message.changesBuf
+        });
         break;
       case 'UPDATE':
-        TerriGameUI.applyGameUpdate({ ...message.payload, changesBuf: message.changesBuf });
+        TerriGameUI.applyGameUpdate({
+          ...message.payload,
+          players: decodePlayers(message.playersBuf) || [],
+          changesBuf: message.changesBuf
+        });
+        break;
+      case 'PERF':
+        if (message.payload?.kind === 'offline-tick') {
+          console.warn(`Offline simulation tick took ${message.payload.durationMs}ms at tick ${message.payload.tickCount}`);
+        }
         break;
       case 'NUKE_LAUNCHED':
         TerriGameUI.startNukeAnimation(message.payload);

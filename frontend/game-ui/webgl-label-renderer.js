@@ -30,10 +30,6 @@ void main() {
 }`;
 
   let cachedGameData = null;
-  let cachedTerritoryVersion = -1;
-  let cachedSquares = new Map();
-  let squareScanAt = -Infinity;
-  const SQUARE_SCAN_INTERVAL_MS = 2000;
   let labelCanvas = null;
   let gl = null;
   let program = null;
@@ -99,59 +95,29 @@ void main() {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, ATLAS_WIDTH, ATLAS_HEIGHT, 0, gl.RGBA, gl.UNSIGNED_BYTE, atlasCanvas);
   }
 
-  function largestOwnedSquares(owners, width, height) {
-    const depths = new Uint16Array(width);
-    const bestSquares = new Map();
-    for (let y = 0; y < height; y += 1) {
-      let diagonal = 0;
-      for (let x = 0; x < width; x += 1) {
-        const position = y * width + x;
-        const ownerId = owners[position];
-        const previous = depths[x];
-        if (ownerId) {
-          const left = x > 0 && owners[position - 1] === ownerId ? depths[x - 1] : 0;
-          const above = y > 0 && owners[position - width] === ownerId ? previous : 0;
-          const upperLeft = x > 0 && y > 0 && owners[position - width - 1] === ownerId ? diagonal : 0;
-          depths[x] = Math.min(left, above, upperLeft) + 1;
-          const current = bestSquares.get(ownerId);
-          if (!current || depths[x] > current.size) bestSquares.set(ownerId, { size: depths[x], x: x - depths[x] + 1, y: y - depths[x] + 1 });
-        } else depths[x] = 0;
-        diagonal = previous;
-      }
-    }
-    return bestSquares;
-  }
-
   function resolveLabelLayout(gameData, territoryVersion) {
     const width = gameData.map.width;
-    const height = gameData.map.height;
-    const now = performance.now();
-    const territoryChanged = gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion;
-    if (territoryChanged && now - squareScanAt >= SQUARE_SCAN_INTERVAL_MS) {
-      cachedSquares = largestOwnedSquares(gameData.owners, width, height);
-      cachedGameData = gameData;
-      cachedTerritoryVersion = territoryVersion;
-      squareScanAt = now;
-    }
     if (!mapBounds) mapBounds = mapCanvas.getBoundingClientRect();
-    const scaleX = mapBounds.width / width;
-    const scaleY = mapBounds.height / height;
+    const cellWidth = mapBounds.width / width;
+    const cellHeight = mapBounds.height / gameData.map.height;
     const biggestPlayer = [...gameData.players].filter((player) => player.isAlive !== false && (player.territorySize || 0) > 0).sort((first, second) =>
       (second.territorySize || 0) - (first.territorySize || 0) || (second.troops || 0) - (first.troops || 0))[0];
     const entries = [];
     for (const player of gameData.players) {
-      const ownerId = Number(player.playerId.replace('player-', ''));
-      const square = cachedSquares.get(ownerId);
-      if (!square) continue;
-      const squarePixels = Math.min(square.size * scaleX, square.size * scaleY);
+      if (!Number.isInteger(player.spawnPosition)) continue;
+      const centerX = player.spawnPosition % width;
+      const centerY = Math.floor(player.spawnPosition / width);
+      const squareSize = 5;
+      const squarePixels = Math.min(squareSize * cellWidth, squareSize * cellHeight);
       if (squarePixels < MIN_LABEL_PIXELS) continue;
-      const screenX = mapBounds.left + square.x * scaleX;
-      const screenY = mapBounds.top + square.y * scaleY;
-      const screenWidth = square.size * scaleX;
-      const screenHeight = square.size * scaleY;
+      const screenX = mapBounds.left + (centerX - 2) * cellWidth;
+      const screenY = mapBounds.top + (centerY - 2) * cellHeight;
+      const screenWidth = squareSize * cellWidth;
+      const screenHeight = squareSize * cellHeight;
       if (screenX + screenWidth < 0 || screenX > window.innerWidth || screenY + screenHeight < 0 || screenY > window.innerHeight) continue;
       entries.push({ player, screenX, screenY, screenWidth, screenHeight, hasCrown: player.isWinner || player.playerId === biggestPlayer?.playerId });
     }
+    cachedGameData = gameData;
     return entries;
   }
 
@@ -274,24 +240,13 @@ void main() {
   }
 
   function getLabelCenter(playerId, gameData, territoryVersion = 0) {
-    if (!gameData?.owners || !gameData.players) return null;
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    const now = performance.now();
-    const territoryChanged = gameData !== cachedGameData || territoryVersion !== cachedTerritoryVersion;
-    if (territoryChanged && now - squareScanAt >= SQUARE_SCAN_INTERVAL_MS) {
-      cachedSquares = largestOwnedSquares(gameData.owners, width, height);
-      cachedGameData = gameData;
-      cachedTerritoryVersion = territoryVersion;
-      squareScanAt = now;
-    }
-    const ownerId = Number(String(playerId).replace('player-', ''));
-    const square = cachedSquares.get(ownerId);
-    if (square) return { x: square.x + square.size / 2, y: square.y + square.size / 2 };
-    for (let position = 0; position < gameData.owners.length; position += 1) {
-      if (gameData.owners[position] === ownerId) return { x: position % width + 0.5, y: Math.floor(position / width) + 0.5 };
-    }
-    return null;
+    if (!gameData?.players) return null;
+    const player = gameData.players.find((entry) => entry.playerId === playerId);
+    if (!player || !Number.isInteger(player.spawnPosition)) return null;
+    return {
+      x: player.spawnPosition % gameData.map.width + 0.5,
+      y: Math.floor(player.spawnPosition / gameData.map.width) + 0.5
+    };
   }
 
   function invalidateLayout() {

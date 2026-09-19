@@ -6,6 +6,7 @@
   const HUMAN_ID = 'player-1';
   const SPAWN_DURATION_MS = 10000;
   const TICK_MS = 50;
+  const SLOW_TICK_WARN_MS = 20;
   let engine = null;
   let tickHandle = null;
   let spawnHandle = null;
@@ -160,7 +161,12 @@
     if (!engine) return;
     tickHandle = setTimeout(() => {
       if (!engine) return;
+      const tickStartedAt = performance.now();
       const update = engine.tick();
+      const tickDurationMs = performance.now() - tickStartedAt;
+      if (tickDurationMs >= SLOW_TICK_WARN_MS) {
+        self.postMessage({ type: 'PERF', payload: { kind: 'offline-tick', durationMs: Math.round(tickDurationMs * 10) / 10, tickCount: engine.tickCount } });
+      }
       if (update) {
         // Encode every per-tick array as a transferable flat typed buffer.
         // This eliminates structured-clone cost for large object arrays (players,

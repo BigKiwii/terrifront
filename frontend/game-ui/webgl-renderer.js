@@ -254,7 +254,7 @@ void main() {
         if (!rows.has(y)) rows.set(y, []);
         rows.get(y).push(x);
       }
-      if (rows.size > 512 || changeCount > 2048) {
+      if (rows.size > 128 || changeCount > 512) {
         uploadOwners();
         return;
       }
