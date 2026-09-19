@@ -135,7 +135,7 @@ class GameMaster {
     if (this.tickHandle) return;
     this.tickHandle = setInterval(() => {
       for (const game of this.games.values()) {
-        if (game.phase !== 'SPAWNING' || Date.now() < game.spawnDeadline) continue;
+        if (game.phase !== 'SPAWNING' || Date.now() < game.spawnDeadline + 1000) continue;
         const state = game.finalizeSpawnPhase();
         if (state) onGameStarted(state);
       }

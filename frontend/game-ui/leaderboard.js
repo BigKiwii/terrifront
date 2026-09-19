@@ -22,9 +22,7 @@
         .sort((a, b) =>
           (b.territorySize || 0) - (a.territorySize || 0) || (b.troops || 0) - (a.troops || 0));
       const rankedEntries = ranked.map((player, index) => ({ player, index }));
-      const localIndex = ranked.findIndex((player) => player.playerId === localPlayerId);
-      const displayEntries = rankedEntries.slice(0, 9);
-      if (localIndex >= 9) displayEntries.push(rankedEntries[localIndex]);
+      const displayEntries = rankedEntries;
 
       if (!list) {
         leaderboard.innerHTML = '<div class="leaderboard-title">LEADERBOARD</div><div class="leaderboard-list"></div>';
