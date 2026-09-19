@@ -203,10 +203,12 @@
   async function start(message) {
     clearTimers();
     const assetBaseUrl = message.assetBaseUrl || self.location.origin;
-    const terrain = message.terrain ? decodeBytes(message.terrain) : await loadBytes(`${assetBaseUrl}/map/map.bin`);
-    const expansionTimes = message.expansionTimes
-      ? decodeBytes(message.expansionTimes)
-      : await loadBytes(`${assetBaseUrl}/map/expansion-times.bin`);
+    const terrain = message.terrainBuf
+      ? new Uint8Array(message.terrainBuf)
+      : (message.terrain ? decodeBytes(message.terrain) : await loadBytes(`${assetBaseUrl}/map/map.bin`));
+    const expansionTimes = message.expansionTimesBuf
+      ? new Uint8Array(message.expansionTimesBuf)
+      : (message.expansionTimes ? decodeBytes(message.expansionTimes) : await loadBytes(`${assetBaseUrl}/map/expansion-times.bin`));
     const map = logic.createMap(terrain, message.width, message.height, expansionTimes);
     engine = new logic.GameEngine(OFFLINE_GAME_ID, map);
     await engine.addPlayer(message.playerName, HUMAN_ID, false);

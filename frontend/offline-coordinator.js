@@ -9,6 +9,7 @@
 
   let startResolve = null;
   let startReject = null;
+  let preloadReady = null;
 
   // Preload map binaries as soon as the coordinator is parsed so they are
   // already in memory (and the browser HTTP cache) when the player clicks Play.
@@ -17,12 +18,14 @@
   const preload = {};
   if (window.location.protocol !== 'file:') {
     const origin = window.location.origin;
-    fetch(`${origin}/map/map.bin`).then((r) => r.ok ? r.arrayBuffer() : null).then((buf) => {
-      if (buf) preload.terrain = new Uint8Array(buf);
-    }).catch(() => {});
-    fetch(`${origin}/map/expansion-times.bin`).then((r) => r.ok ? r.arrayBuffer() : null).then((buf) => {
-      if (buf) preload.expansionTimes = new Uint8Array(buf);
-    }).catch(() => {});
+    preloadReady = Promise.all([
+      fetch(`${origin}/map/map.bin`).then((r) => r.ok ? r.arrayBuffer() : null).then((buf) => {
+        if (buf) preload.terrain = new Uint8Array(buf);
+      }).catch(() => {}),
+      fetch(`${origin}/map/expansion-times.bin`).then((r) => r.ok ? r.arrayBuffer() : null).then((buf) => {
+        if (buf) preload.expansionTimes = new Uint8Array(buf);
+      }).catch(() => {})
+    ]);
   }
 
   function stop() {
@@ -73,8 +76,9 @@
     }
   }
 
-  function start(playerName) {
+  async function start(playerName) {
     if (!window.Worker) return Promise.reject(new Error('Offline game workers are unavailable'));
+    if (preloadReady) await preloadReady;
     stop();
     try {
       let workerUrl = window.TerriOfflineWorkerUrl || '/dist/offline-worker.js';
@@ -99,10 +103,8 @@
       startResolve = resolve;
       startReject = reject;
       const isFile = window.location.protocol === 'file:';
-      // Resolve terrain: embedded globals (file: protocol) → preloaded buffer →
-      // null (worker will fetch). Convert Uint8Array to base64 string so the
-      // worker can decode it without a structuredClone of the underlying buffer
-      // (which would transfer ownership and break the preload cache).
+      const terrainBuf = isFile ? null : (preload.terrain ? preload.terrain.buffer.slice(0) : null);
+      const expansionTimesBuf = isFile ? null : (preload.expansionTimes ? preload.expansionTimes.buffer.slice(0) : null);
       function encodeBytes(bytes) {
         if (!bytes) return null;
         let binary = '';
@@ -111,10 +113,10 @@
       }
       const terrainPayload = isFile
         ? window.TerriEmbeddedTerrain
-        : (preload.terrain ? encodeBytes(preload.terrain) : null);
+        : (preload.terrain ? null : null);
       const expansionTimesPayload = isFile
         ? window.TerriEmbeddedExpansionTimes
-        : (preload.expansionTimes ? encodeBytes(preload.expansionTimes) : null);
+        : (preload.expansionTimes ? null : null);
       worker.postMessage({
         type: 'START',
         playerName,
@@ -122,8 +124,13 @@
         height: window.TerriMapHeight,
         assetBaseUrl: isFile ? 'http://localhost:8080' : window.location.origin,
         terrain: terrainPayload,
-        expansionTimes: expansionTimesPayload
-      });
+        expansionTimes: expansionTimesPayload,
+        terrainBuf,
+        expansionTimesBuf
+      }, [
+        ...(terrainBuf ? [terrainBuf] : []),
+        ...(expansionTimesBuf ? [expansionTimesBuf] : [])
+      ]);
     });
   }
 
