@@ -156,6 +156,10 @@
     self.postMessage({ type: 'ACTIVE_GAME', payload: state, changesBuf, playersBuf, wastelandBuf }, transferables);
     nextTickAt = Date.now() + TICK_MS;
     scheduleTick();
+    self.postMessage({
+      type: 'WORKER_DIAGNOSTIC',
+      payload: { phase: 'tick-scheduled', delayMs: TICK_MS }
+    });
   }
 
   function scheduleTick() {
