@@ -78,6 +78,18 @@
         startReject = null;
         break;
       case 'SPAWN_CONFIRMED':
+        {
+          const spawn = message.payload || {};
+          const existing = playerMetadata.get(spawn.playerId) || { playerId: spawn.playerId };
+          playerMetadata.set(spawn.playerId, {
+            ...existing,
+            ...spawn,
+            troops: Math.max(existing.troops || 0, 1000),
+            territorySize: spawn.cells?.length || existing.territorySize || 0,
+            isAlive: true,
+            spawnPosition: spawn.position
+          });
+        }
         TerriGameUI.confirmSpawn(message.payload);
         break;
       case 'ACTIVE_GAME':
