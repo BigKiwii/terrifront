@@ -4,8 +4,14 @@ const TerritoryManager = require('../game-logic/territory-manager');
 const ExpansionManager = require('../game-logic/expansion-manager');
 const { BotManager } = require('../bots/bot-manager');
 const BoatManager = require('../game-logic/boat-manager');
-const { performance } = require('node:perf_hooks');
-const runtimeMetrics = require('../diagnostics/runtime-metrics');
+// Universal performance shim: node:perf_hooks in Node, globalThis.performance in browser workers.
+const performance = (typeof globalThis !== 'undefined' && globalThis.performance)
+  ? globalThis.performance
+  : (() => { try { return require('node:perf_hooks').performance; } catch (_) { return { now: () => Date.now() }; } })();
+// runtime-metrics is server-only diagnostics; use a no-op shim in the browser bundle.
+const runtimeMetrics = (typeof module !== 'undefined' && typeof require !== 'undefined')
+  ? (() => { try { return require('../diagnostics/runtime-metrics'); } catch (_) { return { recordTick: () => {} }; } })()
+  : { recordTick: () => {} };
 const {
   createWasteland,
   getNukeDuration,

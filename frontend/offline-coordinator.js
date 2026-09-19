@@ -10,6 +10,21 @@
   let startResolve = null;
   let startReject = null;
 
+  // Preload map binaries as soon as the coordinator is parsed so they are
+  // already in memory (and the browser HTTP cache) when the player clicks Play.
+  // This eliminates the terrain-fetch delay during the spawn phase on Railway.
+  // On file: protocol, embedded globals are used instead — no fetch needed.
+  const preload = {};
+  if (window.location.protocol !== 'file:') {
+    const origin = window.location.origin;
+    fetch(`${origin}/map/map.bin`).then((r) => r.ok ? r.arrayBuffer() : null).then((buf) => {
+      if (buf) preload.terrain = new Uint8Array(buf);
+    }).catch(() => {});
+    fetch(`${origin}/map/expansion-times.bin`).then((r) => r.ok ? r.arrayBuffer() : null).then((buf) => {
+      if (buf) preload.expansionTimes = new Uint8Array(buf);
+    }).catch(() => {});
+  }
+
   function stop() {
     if (worker) worker.terminate();
     if (workerObjectUrl) window.URL.revokeObjectURL(workerObjectUrl);
@@ -83,14 +98,31 @@
     return new Promise((resolve, reject) => {
       startResolve = resolve;
       startReject = reject;
+      const isFile = window.location.protocol === 'file:';
+      // Resolve terrain: embedded globals (file: protocol) → preloaded buffer →
+      // null (worker will fetch). Convert Uint8Array to base64 string so the
+      // worker can decode it without a structuredClone of the underlying buffer
+      // (which would transfer ownership and break the preload cache).
+      function encodeBytes(bytes) {
+        if (!bytes) return null;
+        let binary = '';
+        for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+        return btoa(binary);
+      }
+      const terrainPayload = isFile
+        ? window.TerriEmbeddedTerrain
+        : (preload.terrain ? encodeBytes(preload.terrain) : null);
+      const expansionTimesPayload = isFile
+        ? window.TerriEmbeddedExpansionTimes
+        : (preload.expansionTimes ? encodeBytes(preload.expansionTimes) : null);
       worker.postMessage({
         type: 'START',
         playerName,
         width: window.TerriMapWidth,
         height: window.TerriMapHeight,
-        assetBaseUrl: window.location.protocol === 'file:' ? 'http://localhost:8080' : window.location.origin,
-        terrain: window.location.protocol === 'file:' ? window.TerriEmbeddedTerrain : null,
-        expansionTimes: window.location.protocol === 'file:' ? window.TerriEmbeddedExpansionTimes : null
+        assetBaseUrl: isFile ? 'http://localhost:8080' : window.location.origin,
+        terrain: terrainPayload,
+        expansionTimes: expansionTimesPayload
       });
     });
   }
@@ -112,4 +144,9 @@
   }
 
   window.TerriOfflineGame = { start, stop, submitSpawn, requestExpansion, requestBoat, requestNuke, isRunning: () => running };
+
+  // Expose preloaded buffers so gameUI.js loadTerrain / loadExpansionTimes can
+  // use them directly instead of making a second fetch during the spawn phase.
+  Object.defineProperty(window, 'TerriPreloadedTerrain', { get: () => preload.terrain || null, configurable: true });
+  Object.defineProperty(window, 'TerriPreloadedExpansionTimes', { get: () => preload.expansionTimes || null, configurable: true });
 }());

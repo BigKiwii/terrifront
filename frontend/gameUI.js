@@ -527,6 +527,17 @@
       draw();
       return;
     }
+    // Use the buffer preloaded by offline-coordinator.js if available, avoiding
+    // a redundant network fetch during the spawn phase on Railway.
+    const preloaded = window.TerriPreloadedTerrain;
+    if (preloaded) {
+      if (sessionId !== gameSessionId) return;
+      terrain = preloaded;
+      if (webglRenderer) webglRenderer.setTerrain(terrain, mapData.width, mapData.height);
+      buildTerrainLayer();
+      draw();
+      return;
+    }
     const terrainUrl = window.location.protocol === 'file:'
       ? `http://localhost:8080${mapData.terrainUrl}`
       : new URL(mapData.terrainUrl, window.location.href).href;
@@ -546,6 +557,13 @@
       const decodedExpansionTimes = decodeBytes(window.TerriEmbeddedExpansionTimes);
       if (sessionId !== gameSessionId) return;
       expansionTimes = decodedExpansionTimes;
+      return;
+    }
+    // Use the buffer preloaded by offline-coordinator.js if available.
+    const preloaded = window.TerriPreloadedExpansionTimes;
+    if (preloaded) {
+      if (sessionId !== gameSessionId) return;
+      expansionTimes = preloaded;
       return;
     }
     const expansionTimesUrl = window.location.protocol === 'file:'

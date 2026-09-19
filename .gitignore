@@ -16,3 +16,6 @@ Thumbs.db
 warfront-reference/
 map/*
 !map/europ-asia-map.webp
+report.txt
+profile-metrics.json
+backend-optimization-plan.md
