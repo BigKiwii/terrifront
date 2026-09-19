@@ -420,6 +420,7 @@
   });
   const dynamicRenderer = modules.dynamicRenderer.createDynamicRenderer({
     context: dynamicContext,
+    getGameData: () => gameData,
     getState: () => ({
       gameData,
       terrain,
