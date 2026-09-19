@@ -89,7 +89,7 @@ const workerSourceOutputPath = path.join(root, 'dist', 'offline-worker-source.js
 const embeddedMapData = `<script>window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='offline-worker.js?v=${workerVersion}';</script><script src="offline-worker-source.js"></script>`;
 
 const output = html
-  .replace('<script src="../shared/binary-protocol.js"></script>', embeddedMapData)
+  .replace('<script src="game-ui/webgl-renderer.js"></script>', `${embeddedMapData}<script src="game-ui/webgl-renderer.js"></script>`)
   .replace('<link rel="stylesheet" href="index.css">', `<style>${css.replace("url('../map/europ-asia-map.webp')", "url('../map/europ-asia-map.webp')")}</style>`)
   .replace('<script src="game-ui/webgl-renderer.js"></script>', `<script>${webglRenderer}</script>`)
   .replace('<script src="player-label-renderer.js"></script>', `<script>${playerLabelRenderer}</script>`)
