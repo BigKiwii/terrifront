@@ -94,6 +94,7 @@
   let nukeSelecting = false;
   let nukeTarget = null;
   let nukeFlight = null;
+  let nukeShake = null;
   const TROOP_SMOOTHING_MS = 90;
   let packetIntervalMs = 100;
   let lastPacketAt = 0;
@@ -154,6 +155,24 @@
     dynamicScheduler.stop();
     canvasResizer.stop();
     mapGestures.stop();
+  }
+
+  function getNukeShakeOffset() {
+    if (!nukeShake) return { x: 0, y: 0 };
+    const elapsed = performance.now() - nukeShake.startedAt;
+    if (elapsed >= nukeShake.durationMs) {
+      nukeShake = null;
+      return { x: 0, y: 0 };
+    }
+    const progress = elapsed / nukeShake.durationMs;
+    const magnitude = nukeShake.strength * (1 - progress) ** 3;
+    const bucket = Math.floor(elapsed / 16);
+    const horizontal = (bucket * 1664525 + 1013904223) & 0xffffffff;
+    const vertical = (bucket * 22695477 + 1) & 0xffffffff;
+    return {
+      x: (((horizontal >>> 16) & 0xff) / 127.5 - 1) * magnitude,
+      y: (((vertical >>> 16) & 0xff) / 127.5 - 1) * magnitude
+    };
   }
 
   function stopTroopUpdateWatchdog() {
@@ -325,10 +344,12 @@
   }
 
   function startNukeFlight(data) {
-    if (!gameData || !Number.isInteger(data?.start) || !Number.isInteger(data?.target)) return;
+    const start = data?.startPosition ?? data?.start;
+    const target = data?.targetPosition ?? data?.target;
+    if (!gameData || !Number.isInteger(start) || !Number.isInteger(target)) return;
     nukeFlight = {
-      start: data.start,
-      target: data.target,
+      start,
+      target,
       startedAt: performance.now(),
       durationMs: Math.max(3750, Number(data.durationMs) || 3750)
     };
@@ -476,6 +497,7 @@
     getNukeFlight: () => nukeFlight,
     clearNukeFlight: () => { nukeFlight = null; },
     onNukeImpact: () => {
+      nukeShake = { startedAt: performance.now(), durationMs: 600, strength: 5 };
       nukeLaunch.disabled = true;
       nukeSelectTarget.disabled = false;
       nukeStatus.textContent = 'IMPACT REGISTERED // DAMAGE OFFLINE';
@@ -489,6 +511,9 @@
   const renderLoop = modules.renderLoop.createRenderLoop({
     renderState,
     getNukeFlight: () => nukeFlight,
+    hasNukeEffect: () => dynamicRenderer.hasNukeEffect(),
+    getNukeShake: () => nukeShake !== null,
+    applyMapTransform,
     getGameData: () => gameData,
     updateWebglOwners: (changes) => webglSync.updateOwners(changes),
     updateTerritoryLayer: (changes) => sceneRenderer.updateTerritory(changes),
@@ -539,6 +564,7 @@
     setZoom: (value) => { zoom = value; },
     getPan: () => ({ x: panX, y: panY }),
     setPan: (value) => { panX = value.x; panY = value.y; },
+    getShakeOffset: getNukeShakeOffset,
     onCameraChanged: () => {
       renderState.labelsCameraDirty = true;
       hideMapMenu();
@@ -881,6 +907,7 @@
     },
     onCancel: () => {
       nukeFlight = null;
+      dynamicRenderer.resetNukeEffects();
       setNukeMode(false);
     }
   });
@@ -900,6 +927,8 @@
       const sessionId = ++gameSessionId;
       gameData = data;
       nukeFlight = null;
+      nukeShake = null;
+      dynamicRenderer.resetNukeEffects();
       setNukeMode(false);
       territoryVersion = 0;
       displayTroops = 0;
@@ -1196,6 +1225,8 @@
       spawnPhase = null;
       activeGame = false;
       nukeFlight = null;
+      nukeShake = null;
+      dynamicRenderer.resetNukeEffects();
       setNukeMode(false);
       updateActiveAttacks([]);
       winnerBanner.hidden = true;

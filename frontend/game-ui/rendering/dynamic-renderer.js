@@ -5,6 +5,7 @@
 
   function createDynamicRenderer(options) {
     const context = options.context;
+    let nukeImpactFlash = null;
 
     function drawCapital(position, color) {
       const gameData = options.getGameData();
@@ -77,71 +78,111 @@
 
     function drawNukeFlight(timestamp) {
       const flight = options.getNukeFlight();
-      if (!flight) return;
       const gameData = options.getGameData();
+      const renderState = options.getState().renderState;
+      if (nukeImpactFlash) {
+        const flashProgress = Math.min(1, (timestamp - nukeImpactFlash.startedAt) / 420);
+        if (flashProgress < 1) {
+          const radius = flashProgress * 32;
+          const alpha = (1 - flashProgress) * 0.85;
+          context.save();
+          const gradient = context.createRadialGradient(
+            nukeImpactFlash.x, nukeImpactFlash.y, 0,
+            nukeImpactFlash.x, nukeImpactFlash.y, radius
+          );
+          gradient.addColorStop(0, `rgba(255,255,200,${alpha})`);
+          gradient.addColorStop(0.35, `rgba(255,140,40,${alpha * 0.7})`);
+          gradient.addColorStop(1, 'rgba(255,60,20,0)');
+          context.fillStyle = gradient;
+          context.beginPath();
+          context.arc(nukeImpactFlash.x, nukeImpactFlash.y, radius, 0, Math.PI * 2);
+          context.fill();
+          context.globalAlpha = Math.max(0, 1 - flashProgress * 3);
+          context.fillStyle = '#ffffff';
+          context.fillRect(nukeImpactFlash.x - 2, nukeImpactFlash.y - 2, 4, 4);
+          context.restore();
+          renderState.dynamicDirty = true;
+        } else {
+          nukeImpactFlash = null;
+        }
+      }
+      if (!flight || !gameData) return;
       const width = gameData.map.width;
       const start = { x: flight.start % width + 0.5, y: Math.floor(flight.start / width) + 0.5 };
       const end = { x: flight.target % width + 0.5, y: Math.floor(flight.target / width) + 0.5 };
       const deltaX = end.x - start.x;
       const deltaY = end.y - start.y;
       const distance = Math.hypot(deltaX, deltaY);
-      const requestedArcHeight = Math.max(50, distance / 3);
+      const requestedArcHeight = Math.max(40, distance / 2.8);
       const upwardRoom = Math.min(start.y, end.y) - 0.5;
       const downwardRoom = gameData.map.height - 0.5 - Math.max(start.y, end.y);
       const arcSign = upwardRoom >= downwardRoom ? -1 : 1;
       const availableRoom = Math.max(1, arcSign < 0 ? upwardRoom : downwardRoom);
-      const arcHeight = Math.min(requestedArcHeight, availableRoom);
+      const arcHeight = Math.min(requestedArcHeight, availableRoom * 0.85);
       const firstControl = {
-        x: start.x + deltaX / 4,
-        y: options.clamp(start.y + deltaY / 4 + arcSign * arcHeight, 0.5, gameData.map.height - 0.5)
+        x: start.x + deltaX * 0.2,
+        y: options.clamp(start.y + deltaY * 0.05 + arcSign * arcHeight, 0.5, gameData.map.height - 0.5)
       };
       const secondControl = {
-        x: start.x + deltaX * 3 / 4,
-        y: options.clamp(start.y + deltaY * 3 / 4 + arcSign * arcHeight, 0.5, gameData.map.height - 0.5)
+        x: start.x + deltaX * 0.75,
+        y: options.clamp(start.y + deltaY * 0.6 + arcSign * arcHeight * 0.7, 0.5, gameData.map.height - 0.5)
       };
       const progress = Math.min(1, (timestamp - flight.startedAt) / flight.durationMs);
-      const trailStart = Math.max(0, progress - 0.22);
-      const position = options.nukeGeometry.cubicPoint(start, firstControl, secondControl, end, progress);
-      const previous = options.nukeGeometry.cubicPoint(start, firstControl, secondControl, end, Math.max(0, progress - 0.02));
-      const angle = Math.atan2(position.y - previous.y, position.x - previous.x);
       context.save();
       context.lineCap = 'round';
-      const trailSamples = 16;
-      for (let index = 0; index < trailSamples; index += 1) {
-        const segmentStart = trailStart + (progress - trailStart) * index / trailSamples;
-        const segmentEnd = trailStart + (progress - trailStart) * (index + 1) / trailSamples;
+      context.lineJoin = 'round';
+      const trailSegments = 48;
+      for (let index = 0; index < trailSegments; index += 1) {
+        const segmentStart = index / trailSegments * progress;
+        const segmentEnd = (index + 1) / trailSegments * progress;
+        const normalized = (index + 0.5) / trailSegments;
         const trailPoint = options.nukeGeometry.cubicPoint(start, firstControl, secondControl, end, segmentStart);
         const nextTrailPoint = options.nukeGeometry.cubicPoint(start, firstControl, secondControl, end, segmentEnd);
-        context.globalAlpha = 0.12 + index / trailSamples * 0.72;
+        context.globalAlpha = 0.18 + normalized * (0.62 - normalized * 0.62);
         context.strokeStyle = '#ffffff';
-        context.lineWidth = 1.1 + index / trailSamples;
+        context.lineWidth = 1;
         context.beginPath();
         context.moveTo(trailPoint.x, trailPoint.y);
         context.lineTo(nextTrailPoint.x, nextTrailPoint.y);
         context.stroke();
       }
-      context.translate(position.x, position.y);
-      context.rotate(angle);
-      context.globalAlpha = 1;
-      context.fillStyle = '#f4f3ea';
-      context.strokeStyle = '#071221';
-      context.lineWidth = 0.9;
-      context.beginPath();
-      context.moveTo(7, 0);
-      context.lineTo(2, -2);
-      context.lineTo(-5, -1.5);
-      context.lineTo(-7, 0);
-      context.lineTo(-5, 1.5);
-      context.lineTo(2, 2);
-      context.closePath();
-      context.fill();
-      context.stroke();
-      context.fillStyle = '#e86b52';
-      context.fillRect(-3, -1, 3, 2);
+      if (progress < 1) {
+        const position = options.nukeGeometry.cubicPoint(start, firstControl, secondControl, end, progress);
+        const topLeftX = Math.round(position.x - 2.5);
+        const topLeftY = Math.round(position.y - 2.5);
+        const time = timestamp / 1000;
+        const outerRing = [[0, 0], [1, 0], [2, 0], [3, 0], [4, 0], [0, 1], [4, 1], [0, 2], [4, 2], [0, 3], [4, 3], [0, 4], [1, 4], [2, 4], [3, 4], [4, 4]];
+        outerRing.forEach(([offsetX, offsetY], index) => {
+          const flicker = 0.5 + 0.5 * Math.sin(time * 28 + index * 1.1);
+          context.globalAlpha = flicker;
+          context.fillStyle = `rgb(255,${Math.round(170 + 85 * flicker)},0)`;
+          context.fillRect(topLeftX + offsetX, topLeftY + offsetY, 1, 1);
+        });
+        const innerRing = [[1, 1], [2, 1], [3, 1], [1, 2], [3, 2], [1, 3], [2, 3], [3, 3]];
+        innerRing.forEach(([offsetX, offsetY], index) => {
+          const pulse = 0.75 + 0.25 * Math.sin(time * 20 + index * 0.9);
+          context.globalAlpha = pulse;
+          context.fillStyle = `rgb(255,${Math.round(80 + 40 * pulse)},10)`;
+          context.fillRect(topLeftX + offsetX, topLeftY + offsetY, 1, 1);
+        });
+        context.globalAlpha = 1;
+        context.fillStyle = '#cc1111';
+        context.fillRect(topLeftX + 2, topLeftY + 2, 1, 1);
+        context.globalAlpha = 0.28 + 0.12 * Math.sin(time * 18);
+        const halo = context.createRadialGradient(position.x, position.y, 0, position.x, position.y, 5.5);
+        halo.addColorStop(0, 'rgba(255,200,40,0.9)');
+        halo.addColorStop(1, 'rgba(255,80,0,0)');
+        context.fillStyle = halo;
+        context.beginPath();
+        context.arc(position.x, position.y, 5.5, 0, Math.PI * 2);
+        context.fill();
+      }
       context.restore();
       if (progress >= 1) {
+        nukeImpactFlash = { x: end.x, y: end.y, startedAt: timestamp };
+        options.onNukeImpact?.({ x: end.x, y: end.y, timestamp });
         options.clearNukeFlight();
-        options.onNukeImpact();
+        renderState.dynamicDirty = true;
       }
     }
 
@@ -185,7 +226,12 @@
       state.renderState.dynamicDirty = false;
     }
 
-    return { draw, drawCapital };
+    return {
+      draw,
+      drawCapital,
+      hasNukeEffect: () => Boolean(options.getNukeFlight() || nukeImpactFlash),
+      resetNukeEffects: () => { nukeImpactFlash = null; }
+    };
   }
 
   modules.dynamicRenderer = { createDynamicRenderer };

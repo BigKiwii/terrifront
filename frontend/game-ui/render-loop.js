@@ -80,7 +80,8 @@
       lastFrameAt = timestamp;
       drainPendingChanges(deltaMs);
       options.smoothTroops(deltaMs);
-      if (options.getNukeFlight()) options.renderState.dynamicDirty = true;
+      if (options.hasNukeEffect?.()) options.renderState.dynamicDirty = true;
+      if (options.getNukeShake?.()) options.applyMapTransform();
       if (options.renderState.sceneDirty) options.drawScene();
       if (options.renderState.dynamicDirty) options.drawDynamic();
       if (options.renderState.labelsDirty && options.shouldDrawLabels()) options.drawLabels();

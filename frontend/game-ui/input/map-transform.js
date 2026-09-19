@@ -14,7 +14,8 @@
         y: options.clamp(pan.y, -maxPanY, maxPanY)
       });
       const nextPan = options.getPan();
-      options.mapFrame.style.transform = `translate3d(${nextPan.x}px, ${nextPan.y}px, 0) scale(${zoom})`;
+      const shake = options.getShakeOffset?.() || { x: 0, y: 0 };
+      options.mapFrame.style.transform = `translate3d(${nextPan.x + shake.x}px, ${nextPan.y + shake.y}px, 0) scale(${zoom})`;
       options.onCameraChanged();
     }
 
