@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "prestart": "npm run build",
-    "start": "node backend/websocket.js",
+    "start": "node backend/static-server.js",
     "profile": "node scripts/profile-backend.js",
     "prebuild": "npm run bake-map",
     "build": "node builder/build.js",

@@ -4,14 +4,11 @@ const crypto = require('crypto');
 
 const root = path.resolve(__dirname, '..');
 const frontend = path.join(root, 'frontend');
-const shared = path.join(root, 'shared');
 const manifestPath = path.join(root, 'map', 'manifest.json');
 const outputPath = path.join(root, 'dist', 'terrifront.html');
 
 const html = fs.readFileSync(path.join(frontend, 'index.html'), 'utf8');
-const binaryProtocol = fs.readFileSync(path.join(shared, 'binary-protocol.js'), 'utf8');
 const css = fs.readFileSync(path.join(frontend, 'index.css'), 'utf8');
-const communicator = fs.readFileSync(path.join(frontend, 'communicator.js'), 'utf8');
 const webglRenderer = fs.readFileSync(path.join(frontend, 'game-ui', 'webgl-renderer.js'), 'utf8');
 const playerLabelRenderer = fs.readFileSync(path.join(frontend, 'player-label-renderer.js'), 'utf8');
 const mapGeometry = fs.readFileSync(path.join(frontend, 'game-ui', 'map-geometry.js'), 'utf8');
@@ -92,10 +89,8 @@ const workerSourceOutputPath = path.join(root, 'dist', 'offline-worker-source.js
 const embeddedMapData = `<script>window.TerriMapWidth=${manifest.width};window.TerriMapHeight=${manifest.height};window.TerriOfflineWorkerUrl='offline-worker.js?v=${workerVersion}';</script><script src="offline-worker-source.js"></script>`;
 
 const output = html
-  .replace('<script src="../shared/binary-protocol.js"></script>', `${embeddedMapData}<script src="../shared/binary-protocol.js"></script>`)
+  .replace('<script src="../shared/binary-protocol.js"></script>', embeddedMapData)
   .replace('<link rel="stylesheet" href="index.css">', `<style>${css.replace("url('../map/europ-asia-map.webp')", "url('../map/europ-asia-map.webp')")}</style>`)
-  .replace('<script src="../shared/binary-protocol.js"></script>', `<script>${binaryProtocol}</script>`)
-  .replace('<script src="communicator.js"></script>', `<script>${communicator}</script>`)
   .replace('<script src="game-ui/webgl-renderer.js"></script>', `<script>${webglRenderer}</script>`)
   .replace('<script src="player-label-renderer.js"></script>', `<script>${playerLabelRenderer}</script>`)
   .replace('<script src="game-ui/map-geometry.js"></script>', `<script>${mapGeometry}</script>`)
