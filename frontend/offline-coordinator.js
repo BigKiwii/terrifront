@@ -14,7 +14,7 @@
   let playerMetadata = new Map();
 
   function decodePlayers(buffer) {
-    if (!buffer) return null;
+    if (!buffer) return playerMetadata.size ? [...playerMetadata.values()] : null;
     const values = buffer instanceof Int32Array ? buffer : new Int32Array(buffer);
     const players = [];
     for (let offset = 0; offset < values.length; offset += PLAYER_STRIDE) {
@@ -33,6 +33,7 @@
         spawnPosition: values[offset + 4] < 0 ? null : values[offset + 4]
       });
     }
+    for (const player of players) playerMetadata.set(player.playerId, player);
     return players;
   }
 
@@ -82,7 +83,7 @@
       case 'ACTIVE_GAME':
         TerriGameUI.startActiveGame({
           ...message.payload,
-          players: decodePlayers(message.playersBuf),
+          players: decodePlayers(message.playersBuf) || [...playerMetadata.values()],
           changesBuf: message.changesBuf
         });
         break;
@@ -103,6 +104,9 @@
         break;
       case 'EXPANSION_REJECTED':
       case 'BOAT_REJECTED':
+        TerriGameUI.rejectExpansion(message.payload);
+        break;
+      case 'NUKE_REJECTED':
         TerriGameUI.rejectExpansion(message.payload);
         break;
       case 'ERROR':

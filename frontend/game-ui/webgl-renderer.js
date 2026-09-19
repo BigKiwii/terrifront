@@ -58,6 +58,29 @@ void main() {
   outColor = vec4(mix(baseColor.rgb, territoryColor, territoryAlpha), 1.0);
 }`;
 
+  const ownerUpdateVertexSource = `#version 300 es
+in uint aPosition;
+in uint aOwner;
+uniform ivec2 uMapSize;
+flat out uint vOwner;
+void main() {
+  uint x = aPosition % uint(uMapSize.x);
+  uint y = aPosition / uint(uMapSize.x);
+  vec2 pixel = vec2(float(x) + 0.5, float(uMapSize.y - 1) - float(y) + 0.5);
+  vec2 clip = pixel / vec2(uMapSize) * 2.0 - 1.0;
+  gl_Position = vec4(clip, 0.0, 1.0);
+  gl_PointSize = 1.0;
+  vOwner = aOwner;
+}`;
+
+  const ownerUpdateFragmentSource = `#version 300 es
+precision highp int;
+flat in uint vOwner;
+layout(location = 0) out uint outOwner;
+void main() {
+  outOwner = vOwner;
+}`;
+
   function compileShader(gl, type, source) {
     const shader = gl.createShader(type);
     gl.shaderSource(shader, source);
@@ -83,6 +106,19 @@ void main() {
     return program;
   }
 
+  function createOwnerUpdateProgram(gl) {
+    const program = gl.createProgram();
+    gl.attachShader(program, compileShader(gl, gl.VERTEX_SHADER, ownerUpdateVertexSource));
+    gl.attachShader(program, compileShader(gl, gl.FRAGMENT_SHADER, ownerUpdateFragmentSource));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      const message = gl.getProgramInfoLog(program);
+      gl.deleteProgram(program);
+      throw new Error(`WebGL owner update program linking failed: ${message}`);
+    }
+    return program;
+  }
+
   function parseHexColor(color) {
     const match = String(color || '').match(/^#([0-9a-f]{6})$/i);
     if (!match) return [105, 200, 120, 255];
@@ -100,6 +136,7 @@ void main() {
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
 
     const program = createProgram(gl);
+    const ownerUpdateProgram = createOwnerUpdateProgram(gl);
     const positionLocation = gl.getAttribLocation(program, 'aPosition');
     const texCoordLocation = gl.getAttribLocation(program, 'aTexCoord');
     const mapSizeLocation = gl.getUniformLocation(program, 'uMapSize');
@@ -113,9 +150,16 @@ void main() {
     const ownersTexture = gl.createTexture();
     const wastelandTexture = gl.createTexture();
     const paletteTexture = gl.createTexture();
+    const ownerUpdateFramebuffer = gl.createFramebuffer();
+    const ownerUpdateVertexArray = gl.createVertexArray();
+    const ownerUpdateBuffer = gl.createBuffer();
+    const ownerUpdateMapSizeLocation = gl.getUniformLocation(ownerUpdateProgram, 'uMapSize');
+    const ownerUpdatePositionLocation = gl.getAttribLocation(ownerUpdateProgram, 'aPosition');
+    const ownerUpdateOwnerLocation = gl.getAttribLocation(ownerUpdateProgram, 'aOwner');
     let width = 1;
     let height = 1;
     let ownerData = new Uint16Array(1);
+    let ownerUpdateData = new Uint32Array(0);
     let wastelandData = new Uint8Array(1);
     let mapReady = false;
 
@@ -131,6 +175,14 @@ void main() {
     gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 16, 0);
     gl.enableVertexAttribArray(texCoordLocation);
     gl.vertexAttribPointer(texCoordLocation, 2, gl.FLOAT, false, 16, 8);
+
+    gl.bindVertexArray(ownerUpdateVertexArray);
+    gl.bindBuffer(gl.ARRAY_BUFFER, ownerUpdateBuffer);
+    gl.enableVertexAttribArray(ownerUpdatePositionLocation);
+    gl.vertexAttribIPointer(ownerUpdatePositionLocation, 1, gl.UNSIGNED_INT, 8, 0);
+    gl.enableVertexAttribArray(ownerUpdateOwnerLocation);
+    gl.vertexAttribIPointer(ownerUpdateOwnerLocation, 1, gl.UNSIGNED_INT, 8, 4);
+    gl.bindVertexArray(null);
 
     function configureTexture(texture, minFilter, magFilter) {
       gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -179,6 +231,13 @@ void main() {
     function uploadOwners() {
       gl.bindTexture(gl.TEXTURE_2D, ownersTexture);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.R16UI, width, height, 0, gl.RED_INTEGER, gl.UNSIGNED_SHORT, ownerData);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, ownerUpdateFramebuffer);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, ownersTexture, 0);
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        throw new Error('WebGL owner update framebuffer is incomplete');
+      }
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
     function setOwners(owners) {
@@ -244,34 +303,32 @@ void main() {
         }
         return;
       }
-      const rows = new Map();
+      if (ownerUpdateData.length < changeCount * 2) ownerUpdateData = new Uint32Array(changeCount * 2);
+      let validChangeCount = 0;
       for (let index = 0; index < changeCount; index += 1) {
         const position = changes instanceof Int32Array ? changes[index * 2] : changes[index].position;
         if (!Number.isInteger(position) || position < 0 || position >= ownerData.length) continue;
-        ownerData[position] = changes instanceof Int32Array ? changes[index * 2 + 1] : owners[position];
-        const y = Math.floor(position / width);
-        const x = position % width;
-        if (!rows.has(y)) rows.set(y, []);
-        rows.get(y).push(x);
+        const owner = changes instanceof Int32Array ? changes[index * 2 + 1] : owners[position];
+        ownerData[position] = owner;
+        ownerUpdateData[validChangeCount * 2] = position;
+        ownerUpdateData[validChangeCount * 2 + 1] = owner;
+        validChangeCount += 1;
       }
-      if (rows.size > 128 || changeCount > 512) {
-        uploadOwners();
-        return;
-      }
-      gl.bindTexture(gl.TEXTURE_2D, ownersTexture);
-      for (const [y, positions] of rows) {
-        positions.sort((first, second) => first - second);
-        let start = positions[0];
-        let end = start;
-        for (let index = 1; index <= positions.length; index += 1) {
-          const next = index < positions.length ? positions[index] : -1;
-          if (next !== end + 1 && next !== end) {
-            gl.texSubImage2D(gl.TEXTURE_2D, 0, start, y, end - start + 1, 1, gl.RED_INTEGER, gl.UNSIGNED_SHORT, ownerData.subarray(y * width + start, y * width + end + 1));
-            start = next;
-          }
-          end = next;
-        }
-      }
+      if (!validChangeCount) return;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, ownerUpdateFramebuffer);
+      gl.viewport(0, 0, width, height);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.SCISSOR_TEST);
+      gl.colorMask(true, true, true, true);
+      gl.useProgram(ownerUpdateProgram);
+      gl.uniform2i(ownerUpdateMapSizeLocation, width, height);
+      gl.bindVertexArray(ownerUpdateVertexArray);
+      gl.bindBuffer(gl.ARRAY_BUFFER, ownerUpdateBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, ownerUpdateData.subarray(0, validChangeCount * 2), gl.STREAM_DRAW);
+      gl.drawArrays(gl.POINTS, 0, validChangeCount);
+      gl.bindVertexArray(vertexArray);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     }
 
     function setPalette(colors, fallbackColor) {

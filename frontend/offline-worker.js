@@ -277,6 +277,7 @@
           type: 'NUKE_LAUNCHED',
           payload: { ...result, start: result.startPosition, target: result.targetPosition }
         });
+        else self.postMessage({ type: 'NUKE_REJECTED', payload: result });
       }
     } catch (error) {
       self.postMessage({ type: 'ERROR', message: error.message });
