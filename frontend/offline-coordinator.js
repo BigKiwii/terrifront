@@ -114,6 +114,9 @@
           console.warn(`Offline simulation tick took ${message.payload.durationMs}ms at tick ${message.payload.tickCount}`);
         }
         break;
+      case 'WORKER_DIAGNOSTIC':
+        console.info('[TerriFront] Offline worker diagnostic', message.payload);
+        break;
       case 'NUKE_LAUNCHED':
         TerriGameUI.startNukeAnimation(message.payload);
         break;

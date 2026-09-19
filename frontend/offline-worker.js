@@ -11,6 +11,7 @@
   let tickHandle = null;
   let spawnHandle = null;
   let nextTickAt = 0;
+  let tickAttemptCount = 0;
 
   function decodeBytes(encoded) {
     const binary = atob(encoded || '');
@@ -161,6 +162,13 @@
     if (!engine) return;
     tickHandle = setTimeout(() => {
       if (!engine) return;
+      tickAttemptCount += 1;
+      if (tickAttemptCount === 1 || tickAttemptCount % 100 === 0) {
+        self.postMessage({
+          type: 'WORKER_DIAGNOSTIC',
+          payload: { phase: 'tick-start', tickAttemptCount, engineTickCount: engine.tickCount }
+        });
+      }
       const tickStartedAt = performance.now();
       let update = null;
       try {
@@ -196,6 +204,15 @@
         const wastelandBuf  = encodeWastelandList(update.wastelandChanges);
         const boatsBuf      = encodeBoatsList(update.boats);
         if (playersBuf) {
+          self.postMessage({
+            type: 'WORKER_DIAGNOSTIC',
+            payload: {
+              phase: 'player-buffer',
+              tickCount: update.tickCount,
+              playerCount: update.players.length,
+              firstPlayerTroops: update.players[0]?.troops
+            }
+          });
           console.info('[TerriFront worker] Player buffer emitted', {
             tickCount: update.tickCount,
             playerCount: update.players.length,
