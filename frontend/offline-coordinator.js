@@ -14,7 +14,7 @@
   let playerMetadata = new Map();
 
   function decodePlayers(buffer) {
-    if (!buffer) return playerMetadata.size ? [...playerMetadata.values()] : null;
+    if (!buffer) return [];
     const values = buffer instanceof Int32Array ? buffer : new Int32Array(buffer);
     const players = [];
     for (let offset = 0; offset < values.length; offset += PLAYER_STRIDE) {

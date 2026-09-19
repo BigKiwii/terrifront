@@ -2,6 +2,10 @@
   'use strict';
 
   const modules = window.TerriGameModules || {};
+  const clamp = modules.mathUtils.clamp;
+  const formatTroops = modules.formatUtils.formatTroops;
+  const changeBuffer = modules.changeBuffer;
+  const nukeGeometry = modules.nukeGeometry;
   const mapGeometry = modules.mapGeometry;
   const colorUtils = modules.colorUtils;
   const gameStore = modules.gameStore;
@@ -25,8 +29,6 @@
   const activeAttacksPanel = document.querySelector('#active-attacks');
   const leaderboard = document.querySelector('#leaderboard');
   const winnerBanner = document.querySelector('#winner-banner');
-  const nukeInboundBanner = document.querySelector('#nuke-inbound-banner');
-  const nukeVignette = document.querySelector('#nuke-vignette');
   const attackRatioPanel = document.querySelector('#attack-ratio-panel');
   const powerSlider = document.querySelector('#power-slider');
   const nukeTrigger = document.querySelector('#nuke-trigger');
@@ -54,7 +56,6 @@
   const wastelandContext = wastelandCanvas.getContext('2d');
   const sceneCanvas = document.createElement('canvas');
   const sceneContext = sceneCanvas.getContext('2d');
-  const renderScale = 1;
   try {
     TerriPlayerLabelRenderer.init(document.querySelector('#game-screen'), canvas);
   } catch (error) {
@@ -73,7 +74,6 @@
   let selectedColor = '#69c878';
   let spawnSubmitHandler = null;
   let nukeLaunchHandler = null;
-  let timerHandle = null;
   let terrain = null;
   let wasteland = null;
   let expansionTimes = null;
@@ -82,17 +82,12 @@
   let activeGame = false;
   let mapActionHandler = null;
   let boatActionHandler = null;
-  let menuPosition = null;
-  let mapScale = 1;
   let hoverPosition = null;
-  let playerColorCache = new Map();
   let localCapitalCells = new Set();
   let selectedSpawnCells = [];
   let confirmedPosition = null;
   let currentPower = 500;
   let territoryVersion = 0;
-  let labelTerritoryVersion = -1;
-  let eliminationAnimationFrame = null;
   let localPlayerEliminated = false;
   let localPlayerWon = false;
   let nukeMode = false;
@@ -100,59 +95,12 @@
   let nukeTarget = null;
   let nukeFlight = null;
   const TROOP_SMOOTHING_MS = 90;
-  const LEADERBOARD_INTERVAL_MS = 250;
-  const LABEL_UPDATE_INTERVAL_MS = 500;
-  const PLAYER_FOCUS_ZOOM = 4;
-  let pendingChanges = new Int32Array(0);
-  let pendingLength = 0;
-  let pendingHead = 0;
-  let drainRate = 0;
-  let drainCarry = 0;
   let packetIntervalMs = 100;
   let lastPacketAt = 0;
-  let renderLoopRunning = false;
-  let lastFrameAt = 0;
   let displayTroops = 0;
   let targetTroops = 0;
-  let leaderboardAt = 0;
-  let activeAttacks = [];
-  const attackCardState = new Map();
 
-  let territoryImageData = null;
-  let territoryLayerDirty = false;
-  let wastelandImageData = null;
-  let wastelandLayerDirty = false;
-  let localWaterBorderVersion = -1;
-  let localPlayerHasWaterBorder = false;
-  let dirtyMinX = Infinity;
-  let dirtyMinY = Infinity;
-  let dirtyMaxX = -Infinity;
-  let dirtyMaxY = -Infinity;
-  let lastLabelDrawAt = 0;
-  let labelDrawFrame = null;
-  let dynamicDrawFrame = null;
-  let canvasResizeFrame = null;
   let gameSessionId = 0;
-
-  function updateWebglPalette() {
-    if (!webglRenderer) return;
-    webglRenderer.setPalette(playerColors, selectedColor);
-    renderState.sceneDirty = true;
-  }
-
-  function updateWebglOwners(changes = null) {
-    if (!webglRenderer || !gameData?.owners) return;
-    if (changes?.length) webglRenderer.updateOwners(gameData.owners, changes);
-    else webglRenderer.setOwners(gameData.owners);
-    renderState.sceneDirty = true;
-  }
-
-  function updateWebglWasteland(changes = null) {
-    if (!webglRenderer || !wasteland) return;
-    if (changes?.length) webglRenderer.updateWasteland(wasteland, changes);
-    else webglRenderer.setWasteland(wasteland);
-    renderState.sceneDirty = true;
-  }
 
   function applyWastelandChanges(changes = []) {
     if (!wasteland || !changes.length) return;
@@ -161,17 +109,9 @@
       const value = typeof change === 'number' ? 1 : change.value;
       if (position >= 0 && position < wasteland.length) wasteland[position] = value;
     }
-    updateWebglWasteland(changes);
-    updateWastelandLayer(changes);
+    webglSync.updateWasteland(changes);
+    sceneRenderer.updateWasteland(changes);
     renderState.sceneDirty = true;
-  }
-
-  function clamp(value, minimum, maximum) {
-    return Math.min(Math.max(value, minimum), maximum);
-  }
-
-  function formatTroops(value) {
-    return Math.round(Number(value) || 0).toLocaleString('en-US').replace(/,/g, ' ');
   }
 
   function updatePowerSlider() {
@@ -183,472 +123,81 @@
   function updateRatioDisplay() {
     const percentage = Number(powerSlider.value);
     currentPower = percentage * 10;
-    const fill = document.getElementById('ratio-bar-fill');
-    const label = document.getElementById('ratio-bar-label');
-    if (fill) {
-      fill.style.width = `${percentage}%`;
-      fill.classList.toggle('is-aggressive', percentage > 70);
-    }
     const localPlayer = gameData?.players?.find((player) => player.playerId === localPlayerId);
-    const troops = Math.floor((localPlayer?.troops || 0) * percentage / 100);
-    if (label) label.textContent = `${formatTroops(troops)} (${percentage}%)`;
+    ratioDisplay.update(percentage, localPlayer);
   }
 
   function resetInterpolation() {
-    pendingChanges = new Int32Array(0);
-    pendingLength = 0;
-    pendingHead = 0;
-    drainRate = 0;
-    drainCarry = 0;
     packetIntervalMs = 100;
     lastPacketAt = 0;
   }
 
   // Keep offline updates flat; only the multiplayer compatibility path needs a
   // one-time conversion from its legacy object array.
-  function decodeChangesBuf(data) {
-    if (data.changesBuf) return data.changesBuf instanceof Int32Array ? data.changesBuf : new Int32Array(data.changesBuf);
-    const changes = data.changes || [];
-    if (changes instanceof Int32Array) return changes;
-    const buffer = new Int32Array(changes.length * 2);
-    for (let index = 0; index < changes.length; index += 1) {
-      buffer[index * 2] = changes[index].position;
-      buffer[index * 2 + 1] = changes[index].owner;
-    }
-    return buffer;
-  }
-
-  function forEachChange(changes, callback) {
-    if (changes instanceof Int32Array) {
-      for (let index = 0; index < changes.length; index += 2) callback(changes[index], changes[index + 1]);
-      return;
-    }
-    for (const change of changes || []) callback(change.position, change.owner);
-  }
-
-  // Decode a playersBuf (flat Int32Array, 8 ints per player) back into the
-  // player-object shape expected by the rest of applyGameUpdate / startActiveGame.
-  // Only the numeric fields are encoded; string fields (playerName, capitalColor,
-  // playerId) are already in playerMap from the initial ACTIVE_GAME message and
-  // must be merged from there, not reconstructed from scratch.
-  const OFFLINE_PLAYER_STRIDE = 8;
-  function decodePlayersBuf(buf) {
-    if (!buf) return null;
-    const raw = buf instanceof Int32Array ? buf : new Int32Array(buf);
-    const count = Math.floor(raw.length / OFFLINE_PLAYER_STRIDE);
-    const result = [];
-    for (let i = 0; i < count; i += 1) {
-      const base   = i * OFFLINE_PLAYER_STRIDE;
-      const numId  = raw[base];
-      const flags  = raw[base + 3];
-      // Re-use the existing player object from playerMap when available so that
-      // string fields (playerName, capitalColor) are preserved without re-sending.
-      const playerId = `player-${numId}`;
-      const existing = playerMap.get(playerId);
-      result.push({
-        playerId,
-        playerName:      existing?.playerName      ?? playerId,
-        capitalColor:    existing?.capitalColor     ?? null,
-        troops:          raw[base + 1],
-        territorySize:   raw[base + 2],
-        isBot:           Boolean(flags & 1),
-        isAlive:         Boolean(flags & 2),
-        isWinner:        Boolean(flags & 4),
-        expansionActive: Boolean(flags & 8),
-        spawnPosition:   raw[base + 4] === -1 ? null : raw[base + 4],
-      });
-    }
-    return result;
-  }
-
-  // Decode wastelandBuf (flat Int32Array: [position, value, ...]) into the
-  // [{position, value}] shape expected by applyWastelandChanges.
-  function decodeWastelandBuf(buf) {
-    if (!buf) return null;
-    const raw = buf instanceof Int32Array ? buf : new Int32Array(buf);
-    const result = [];
-    for (let i = 0; i + 1 < raw.length; i += 2) result.push({ position: raw[i], value: raw[i + 1] });
-    return result;
-  }
-
-  // Decode boatsBuf (flat Int32Array: [ownerId, position, troops, ...]) into the
-  // [{ownerId, position, troops}] shape expected by boats.splice / drawBoats.
-  const OFFLINE_BOAT_STRIDE = 3;
-  function decodeBoatsBuf(buf) {
-    if (!buf) return null;
-    const raw = buf instanceof Int32Array ? buf : new Int32Array(buf);
-    const count = Math.floor(raw.length / OFFLINE_BOAT_STRIDE);
-    const result = [];
-    for (let i = 0; i < count; i += 1) {
-      const base = i * OFFLINE_BOAT_STRIDE;
-      result.push({ ownerId: raw[base], position: raw[base + 1], troops: raw[base + 2] });
-    }
-    return result;
-  }
-
-  function queueChanges(changes) {
-    if (!changes?.length) return;
-    const incoming = changes instanceof Int32Array ? changes : decodeChangesBuf({ changes });
-    const unread = pendingLength - pendingHead;
-    if (pendingChanges.length < unread + incoming.length) {
-      const next = new Int32Array(Math.max(unread + incoming.length, pendingChanges.length * 2, 1024));
-      if (unread) next.set(pendingChanges.subarray(pendingHead, pendingLength));
-      pendingChanges = next;
-      pendingLength = unread;
-      pendingHead = 0;
-    } else if (pendingHead > 0 && unread) {
-      pendingChanges.copyWithin(0, pendingHead, pendingLength);
-      pendingLength = unread;
-      pendingHead = 0;
-    } else if (unread === 0) {
-      pendingLength = 0;
-      pendingHead = 0;
-    }
-    pendingChanges.set(incoming, pendingLength);
-    pendingLength += incoming.length;
-    const remaining = (pendingLength - pendingHead) / 2;
-    drainRate = remaining / Math.max(16, packetIntervalMs);
-  }
-
-  function drainPendingChanges(deltaMs) {
-    const remaining = (pendingLength - pendingHead) / 2;
-    if (remaining === 0) return;
-    drainCarry += drainRate * deltaMs;
-    let budget = Math.floor(drainCarry);
-    if (budget < 1) return;
-    drainCarry -= budget;
-    if (remaining <= budget + 1) budget = remaining;
-
-    const applied = new Int32Array(Math.min(budget, remaining) * 2);
-    let appliedLength = 0;
-    while (pendingHead < pendingLength && budget > 0) {
-      const position = pendingChanges[pendingHead++];
-      const owner = pendingChanges[pendingHead++];
-      gameData.owners[position] = owner;
-      applied[appliedLength++] = position;
-      applied[appliedLength++] = owner;
-      budget -= 1;
-    }
-    if (pendingHead >= pendingLength) {
-      pendingLength = 0;
-      pendingHead = 0;
-    } else if (pendingHead > 8192) {
-      pendingChanges.copyWithin(0, pendingHead, pendingLength);
-      pendingLength -= pendingHead;
-      pendingHead = 0;
-    }
-    if (appliedLength) {
-      const appliedChanges = applied.subarray(0, appliedLength);
-      updateWebglOwners(appliedChanges);
-      updateTerritoryLayer(appliedChanges);
-      territoryVersion += 1;
-      renderState.labelsDirty = true;
-    }
-  }
-
   function smoothTroops(deltaMs) {
     const alpha = 1 - Math.exp(-deltaMs / TROOP_SMOOTHING_MS);
     displayTroops += (targetTroops - displayTroops) * alpha;
     if (Math.abs(targetTroops - displayTroops) < 0.5) displayTroops = targetTroops;
   }
 
-  function renderFrame(timestamp) {
-    if (!renderLoopRunning) return;
-    const deltaMs = lastFrameAt ? Math.min(200, timestamp - lastFrameAt) : 16;
-    lastFrameAt = timestamp;
-    drainPendingChanges(deltaMs);
-    smoothTroops(deltaMs);
-    if (nukeFlight) renderState.dynamicDirty = true;
-    if (nukeShake) { renderState.dynamicDirty = true; applyMapTransform(); }
-    if (renderState.sceneDirty) drawScene();
-    if (renderState.dynamicDirty) drawDynamic();
-    if (renderState.labelsDirty && (renderState.labelsCameraDirty || performance.now() - lastLabelDrawAt >= LABEL_UPDATE_INTERVAL_MS)) {
-      drawLabels();
-    }
-    requestAnimationFrame(renderFrame);
-  }
-
   function startRenderLoop() {
-    if (renderLoopRunning) return;
-    renderLoopRunning = true;
-    lastFrameAt = 0;
-    requestAnimationFrame(renderFrame);
+    renderLoop.start();
   }
 
   function stopRenderLoop() {
-    renderLoopRunning = false;
-    resetInterpolation();
-    clearInterval(timerHandle);
-    timerHandle = null;
-    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
-    eliminationAnimationFrame = null;
-    if (labelDrawFrame !== null) cancelAnimationFrame(labelDrawFrame);
-    labelDrawFrame = null;
-    if (dynamicDrawFrame !== null) cancelAnimationFrame(dynamicDrawFrame);
-    dynamicDrawFrame = null;
-    if (canvasResizeFrame !== null) cancelAnimationFrame(canvasResizeFrame);
-    canvasResizeFrame = null;
+    renderLoop.stop();
+    spawnHudController.stop();
+    cameraController.cancel();
+    labelScheduler.stop();
+    dynamicScheduler.stop();
+    canvasResizer.stop();
+    mapGestures.stop();
   }
 
   function applyMapTransform() {
-    const maxPanX = Math.max(260, (mapFrame.clientWidth * zoom - window.innerWidth) / 2 + 100);
-    const maxPanY = Math.max(220, (mapFrame.clientHeight * zoom - window.innerHeight) / 2 + 100);
-    panX = clamp(panX, -maxPanX, maxPanX);
-    panY = clamp(panY, -maxPanY, maxPanY);
-    // Screen shake: decaying random jitter on top of the normal pan.
-    // Uses a fast hash of (time, tick) to stay stable within a single frame
-    // but jump per-frame, giving a mechanical shudder feel rather than smooth
-    // oscillation.
-    let shakeX = 0;
-    let shakeY = 0;
-    if (nukeShake) {
-      const elapsed = performance.now() - nukeShake.startedAt;
-      if (elapsed < nukeShake.durationMs) {
-        // Decay: starts at 1, falls off quickly (cubic ease-out)
-        const t = elapsed / nukeShake.durationMs;
-        const decay = (1 - t) * (1 - t) * (1 - t);
-        const mag = nukeShake.strength * decay;
-        // Deterministic per-frame jitter via a cheap integer hash of elapsed
-        // rounded to 16ms buckets, so it changes ~every frame but is stable
-        // within a frame (no drift mid-draw).
-        const bucket = Math.floor(elapsed / 16);
-        const hx = (bucket * 1664525 + 1013904223) & 0xffffffff;
-        const hy = (bucket * 22695477 + 1) & 0xffffffff;
-        shakeX = (((hx >>> 16) & 0xff) / 127.5 - 1) * mag;
-        shakeY = (((hy >>> 16) & 0xff) / 127.5 - 1) * mag;
-      } else {
-        nukeShake = null;
-      }
-    }
-    mapFrame.style.transform = `translate3d(${panX + shakeX}px, ${panY + shakeY}px, 0) scale(${zoom})`;
-    renderState.labelsCameraDirty = true;
-    hideMapMenu();
-    TerriPlayerLabelRenderer.invalidateLayout();
-    scheduleLabelDraw();
+    mapTransform.apply();
   }
 
   function resetMapTransform() {
-    zoom = 1;
-    panX = 0;
-    panY = 0;
-    applyMapTransform();
+    mapTransform.reset();
   }
 
   function animateMapToCenter() {
-    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
     dragStart = null;
     dragMoved = false;
-    const startZoom = zoom;
-    const startPanX = panX;
-    const startPanY = panY;
-    const startedAt = performance.now();
-    const duration = 2800;
-
-    function step(now) {
-      const progress = Math.min(1, (now - startedAt) / duration);
-      const eased = progress < 0.5
-        ? 4 * progress * progress * progress
-        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-      zoom = startZoom + (1 - startZoom) * eased;
-      panX = startPanX * (1 - eased);
-      panY = startPanY * (1 - eased);
-      applyMapTransform();
-      if (progress < 1) {
-        eliminationAnimationFrame = requestAnimationFrame(step);
-      } else {
-        eliminationAnimationFrame = null;
-        resetMapTransform();
-      }
-    }
-
-    eliminationAnimationFrame = requestAnimationFrame(step);
+    cameraController.animateToCenter();
   }
 
   function focusPlayer(playerId) {
-    if (!gameData) return;
-    const target = TerriPlayerLabelRenderer.getLabelCenter(playerId, gameData, territoryVersion);
-    if (!target) return;
-    const mapWidth = gameData.map.width;
-    const mapHeight = gameData.map.height;
-    const targetZoom = PLAYER_FOCUS_ZOOM;
-    const targetOffsetX = canvas.offsetLeft + target.x / mapWidth * canvas.offsetWidth - mapFrame.offsetWidth / 2;
-    const targetOffsetY = canvas.offsetTop + target.y / mapHeight * canvas.offsetHeight - mapFrame.offsetHeight / 2;
-    const targetPanX = -targetOffsetX * targetZoom;
-    const targetPanY = -targetOffsetY * targetZoom;
-    const startZoom = zoom;
-    const startPanX = panX;
-    const startPanY = panY;
-    const startedAt = performance.now();
-    const duration = 650;
-    if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
-
-    function step(now) {
-      const progress = Math.min(1, (now - startedAt) / duration);
-      const eased = progress < 0.5
-        ? 4 * progress * progress * progress
-        : 1 - Math.pow(-2 * progress + 2, 3) / 2;
-      zoom = startZoom + (targetZoom - startZoom) * eased;
-      panX = startPanX + (targetPanX - startPanX) * eased;
-      panY = startPanY + (targetPanY - startPanY) * eased;
-      applyMapTransform();
-      if (progress < 1) eliminationAnimationFrame = requestAnimationFrame(step);
-      else eliminationAnimationFrame = null;
-    }
-
-    eliminationAnimationFrame = requestAnimationFrame(step);
-  }
-
-  function resizeCanvas() {
-    if (mapFrame.clientWidth <= 10 || mapFrame.clientHeight <= 10) return false;
-    TerriPlayerLabelRenderer.invalidateLayout();
-    const width = gameData?.map.width || 876;
-    const height = gameData?.map.height || 694;
-    mapScale = renderScale * Math.max(1, Math.floor(window.devicePixelRatio || 1));
-    canvas.style.width = `${mapFrame.clientWidth}px`;
-    canvas.style.height = `${mapFrame.clientHeight}px`;
-    webglCanvas.style.width = `${mapFrame.clientWidth}px`;
-    webglCanvas.style.height = `${mapFrame.clientHeight}px`;
-    dynamicCanvas.style.width = `${canvas.offsetWidth}px`;
-    dynamicCanvas.style.height = `${canvas.offsetHeight}px`;
-    canvas.width = Math.ceil(width * mapScale);
-    canvas.height = Math.ceil(height * mapScale);
-    dynamicCanvas.width = Math.ceil(width * mapScale);
-    dynamicCanvas.height = Math.ceil(height * mapScale);
-    if (webglRenderer) {
-      webglCanvas.width = canvas.width;
-      webglCanvas.height = canvas.height;
-      webglRenderer.resize();
-    }
-    context.setTransform(mapScale, 0, 0, mapScale, 0, 0);
-    dynamicContext.setTransform(mapScale, 0, 0, mapScale, 0, 0);
-    context.imageSmoothingEnabled = false;
-    dynamicContext.imageSmoothingEnabled = false;
-    if (terrain) {
-      buildTerrainLayer();
-      composeSceneLayer();
-      draw();
-    }
-    return true;
-  }
-
-  function scheduleCanvasResize() {
-    if (canvasResizeFrame !== null) return;
-    canvasResizeFrame = requestAnimationFrame(() => {
-      canvasResizeFrame = null;
-      if (gameScreen.hidden) return;
-      if (!resizeCanvas()) {
-        scheduleCanvasResize();
-        return;
-      }
-      applyMapTransform();
-    });
+    if (gameData) cameraController.focusPlayer(playerId, territoryVersion);
   }
 
   function getCapitalCells(position) {
     return mapGeometry.getCapitalCells(position, gameData.map.width, gameData.map.height);
   }
 
-  function drawCapital(position, color) {
-    if (!Number.isInteger(position) || position < 0 || position >= gameData.map.width * gameData.map.height) return;
-    const centerX = position % gameData.map.width;
-    const centerY = Math.floor(position / gameData.map.width);
-    const colors = warFrontPlayerColors(color || '#69c878');
-
-    dynamicContext.fillStyle = colors.border;
-    for (let offsetY = -2; offsetY <= 2; offsetY += 1) {
-      for (let offsetX = -2; offsetX <= 2; offsetX += 1) {
-        if (Math.abs(offsetX) === 2 && Math.abs(offsetY) === 2) continue;
-        dynamicContext.fillRect(centerX + offsetX, centerY + offsetY, 1, 1);
-      }
-    }
-
-    dynamicContext.fillStyle = colors.territory;
-    for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
-      for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
-        dynamicContext.fillRect(centerX + offsetX, centerY + offsetY, 1, 1);
-      }
-    }
+  function isAvailableCapital(position) {
+    const cells = getCapitalCells(position);
+    return cells.length === 21 && cells.every((cell) => gameData.owners[cell] === 0);
   }
 
-  function decodeBytes(encoded) {
-    const binary = atob(encoded);
-    const bytes = new Uint8Array(binary.length);
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-    return bytes;
+  function drawCapital(position, color) {
+    dynamicRenderer.drawCapital(position, color);
   }
 
   async function loadTerrain(mapData, sessionId) {
-    if (window.TerriEmbeddedTerrain) {
-      const decodedTerrain = decodeBytes(window.TerriEmbeddedTerrain);
-      if (sessionId !== gameSessionId) return;
-      terrain = decodedTerrain;
-      if (webglRenderer) webglRenderer.setTerrain(terrain, mapData.width, mapData.height);
-      buildTerrainLayer();
-      draw();
-      return;
-    }
-    // Use the buffer preloaded by offline-coordinator.js if available, avoiding
-    // a redundant network fetch during the spawn phase on Railway.
-    const preloaded = window.TerriPreloadedTerrain;
-    if (preloaded) {
-      if (sessionId !== gameSessionId) return;
-      terrain = preloaded;
-      if (webglRenderer) webglRenderer.setTerrain(terrain, mapData.width, mapData.height);
-      buildTerrainLayer();
-      draw();
-      return;
-    }
-    const terrainUrl = window.location.protocol === 'file:'
-      ? `http://localhost:8080${mapData.terrainUrl}`
-      : new URL(mapData.terrainUrl, window.location.href).href;
-    const response = await fetch(terrainUrl);
-    if (!response.ok) throw new Error(`Terrain request failed: ${response.status}`);
-    const loadedTerrain = new Uint8Array(await response.arrayBuffer());
+    const loadedTerrain = await mapAssets.loadTerrain(mapData);
     if (sessionId !== gameSessionId) return;
     terrain = loadedTerrain;
     if (webglRenderer) webglRenderer.setTerrain(terrain, mapData.width, mapData.height);
-    buildTerrainLayer();
+    sceneRenderer.buildTerrain();
     draw();
   }
 
   async function loadExpansionTimes(mapData, sessionId) {
-    if (!mapData.expansionTimesUrl) return;
-    if (window.TerriEmbeddedExpansionTimes) {
-      const decodedExpansionTimes = decodeBytes(window.TerriEmbeddedExpansionTimes);
-      if (sessionId !== gameSessionId) return;
-      expansionTimes = decodedExpansionTimes;
-      return;
-    }
-    // Use the buffer preloaded by offline-coordinator.js if available.
-    const preloaded = window.TerriPreloadedExpansionTimes;
-    if (preloaded) {
-      if (sessionId !== gameSessionId) return;
-      expansionTimes = preloaded;
-      return;
-    }
-    const expansionTimesUrl = window.location.protocol === 'file:'
-      ? `http://localhost:8080${mapData.expansionTimesUrl}`
-      : new URL(mapData.expansionTimesUrl, window.location.href).href;
-    const response = await fetch(expansionTimesUrl);
-    if (!response.ok) throw new Error(`Expansion times request failed: ${response.status}`);
-    const loadedExpansionTimes = new Uint8Array(await response.arrayBuffer());
-    if (sessionId !== gameSessionId) return;
+    const loadedExpansionTimes = await mapAssets.loadExpansionTimes(mapData);
+    if (!loadedExpansionTimes || sessionId !== gameSessionId) return;
     expansionTimes = loadedExpansionTimes;
-  }
-
-  function isValidCapital(position) {
-    if (!terrain) return false;
-    const centerX = position % gameData.map.width;
-    const centerY = Math.floor(position / gameData.map.width);
-    for (let y = centerY - 2; y <= centerY + 2; y += 1) {
-      for (let x = centerX - 2; x <= centerX + 2; x += 1) {
-        if (x < 0 || x >= gameData.map.width || y < 0 || y >= gameData.map.height) return false;
-        if (Math.abs(x - centerX) === 2 && Math.abs(y - centerY) === 2) continue;
-        const cell = y * gameData.map.width + x;
-        if ((terrain[cell] & 0x80) === 0 || gameData.owners[cell] !== 0) return false;
-      }
-    }
-    return true;
   }
 
   function hashPosition(position) {
@@ -658,427 +207,84 @@
     return (value ^ (value >>> 16)) >>> 0;
   }
 
-  function buildTerrainLayer() {
-    if (!gameData || !terrain) return;
-    if (webglRenderer) return;
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    terrainCanvas.width = width;
-    terrainCanvas.height = height;
-    const pixels = terrainContext.createImageData(width, height);
-    for (let position = 0; position < terrain.length; position += 1) {
-      const pixel = position * 4;
-      const land = (terrain[position] & 0x80) !== 0;
-      const magnitude = terrain[position] & 0x1f;
-      if (land) {
-        pixels.data[pixel] = 226 + Math.min(20, magnitude * 2);
-        pixels.data[pixel + 1] = 209 + Math.min(18, magnitude * 2);
-        pixels.data[pixel + 2] = 161 + Math.min(16, magnitude);
-      } else {
-        pixels.data[pixel] = 79 + Math.min(9, Math.floor(magnitude * 1.2));
-        pixels.data[pixel + 1] = 114 + Math.min(11, Math.floor(magnitude * 1.2));
-        pixels.data[pixel + 2] = 140 + Math.min(7, Math.floor(magnitude * 0.6));
-      }
-      pixels.data[pixel + 3] = 255;
-    }
-    terrainContext.putImageData(pixels, 0, 0);
-    composeSceneLayer();
-  }
-
-  function paintWastelandTile(position) {
-    if (!wastelandImageData || !wasteland?.[position]) return;
-    const pixel = position * 4;
-    wastelandImageData.data[pixel] = 51;
-    wastelandImageData.data[pixel + 1] = 173;
-    wastelandImageData.data[pixel + 2] = 82;
-    wastelandImageData.data[pixel + 3] = 220;
-  }
-
-  function buildWastelandLayer() {
-    if (!gameData || !wasteland || webglRenderer) return;
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    wastelandCanvas.width = width;
-    wastelandCanvas.height = height;
-    wastelandImageData = wastelandContext.createImageData(width, height);
-    for (let position = 0; position < wasteland.length; position += 1) paintWastelandTile(position);
-    wastelandContext.putImageData(wastelandImageData, 0, 0);
-    composeSceneLayer();
-  }
-
-  function warFrontPlayerColors(color) {
-    return colorUtils.playerColors(color);
-  }
-
-  function colorsForOwner(ownerId) {
-    const color = playerColors.get(ownerId) || selectedColor;
-    const cached = playerColorCache.get(ownerId);
-    if (cached?.source === color) return cached;
-    const colors = warFrontPlayerColors(color);
-    const parse = (value) => {
-      const match = value.match(/^rgba?\((\d+),(\d+),(\d+)(?:,([\d.]+))?\)$/);
-      if (!match) return null;
-      return [Number(match[1]), Number(match[2]), Number(match[3]), match[4] === undefined ? 255 : Math.round(Number(match[4]) * 255)];
-    };
-    const cachedColors = { source: color, colors, territoryPixel: parse(colors.territory), borderPixel: parse(colors.border) };
-    playerColorCache.set(ownerId, cachedColors);
-    return cachedColors;
-  }
-
-  function isBorderCell(position, owner) {
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    const x = position % width;
-    const y = Math.floor(position / width);
-    return x === 0 || x === width - 1 || y === 0 || y === height - 1 ||
-      gameData.owners[position - 1] !== owner || gameData.owners[position + 1] !== owner ||
-      gameData.owners[position - width] !== owner || gameData.owners[position + width] !== owner;
-  }
-
-  function paintTerritoryTile(position) {
-    if (position < 0 || position >= gameData.owners.length) return;
-    const width = gameData.map.width;
-    const owner = gameData.owners[position];
-    if (!territoryImageData) return;
-    const pixel = position * 4;
-    territoryImageData.data[pixel] = 0;
-    territoryImageData.data[pixel + 1] = 0;
-    territoryImageData.data[pixel + 2] = 0;
-    territoryImageData.data[pixel + 3] = 0;
-    if (!owner) return;
-    const colors = colorsForOwner(owner);
-    const color = isBorderCell(position, owner) ? colors.borderPixel : colors.territoryPixel;
-    if (!color) return;
-    territoryImageData.data[pixel] = color[0];
-    territoryImageData.data[pixel + 1] = color[1];
-    territoryImageData.data[pixel + 2] = color[2];
-    territoryImageData.data[pixel + 3] = color[3];
-  }
-
-  function rebuildTerritoryLayer() {
-    if (!gameData?.owners) return;
-    if (webglRenderer) {
-      updateWebglOwners();
-      return;
-    }
-    territoryCanvas.width = gameData.map.width;
-    territoryCanvas.height = gameData.map.height;
-    territoryImageData = territoryContext.createImageData(gameData.map.width, gameData.map.height);
-    for (let position = 0; position < gameData.owners.length; position += 1) {
-      paintTerritoryTile(position);
-    }
-    territoryContext.putImageData(territoryImageData, 0, 0);
-    composeSceneLayer();
-  }
-
-  function updateTerritoryLayer(changes) {
-    if (webglRenderer) return;
-    if (!territoryImageData) return;
-    const affected = new Set();
-    forEachChange(changes, (position) => {
-      affected.add(position);
-      for (const neighbor of mapNeighbors(position)) affected.add(neighbor);
-    });
-    for (const position of affected) {
-      paintTerritoryTile(position);
-      const x = position % gameData.map.width;
-      const y = Math.floor(position / gameData.map.width);
-      dirtyMinX = Math.min(dirtyMinX, x);
-      dirtyMinY = Math.min(dirtyMinY, y);
-      dirtyMaxX = Math.max(dirtyMaxX, x);
-      dirtyMaxY = Math.max(dirtyMaxY, y);
-    }
-    territoryLayerDirty = true;
-    renderState.sceneDirty = true;
-  }
-
-  function updateWastelandLayer(changes) {
-    if (webglRenderer || !wastelandImageData) return;
-    for (const change of changes || []) {
-      const position = typeof change === 'number' ? change : change.position;
-      if (position < 0 || position >= wasteland.length) continue;
-      if (wasteland[position]) paintWastelandTile(position);
-      else if (wastelandImageData) {
-        const pixel = position * 4;
-        wastelandImageData.data[pixel] = 0;
-        wastelandImageData.data[pixel + 1] = 0;
-        wastelandImageData.data[pixel + 2] = 0;
-        wastelandImageData.data[pixel + 3] = 0;
-      }
-      const x = position % gameData.map.width;
-      const y = Math.floor(position / gameData.map.width);
-      dirtyMinX = Math.min(dirtyMinX, x);
-      dirtyMinY = Math.min(dirtyMinY, y);
-      dirtyMaxX = Math.max(dirtyMaxX, x);
-      dirtyMaxY = Math.max(dirtyMaxY, y);
-    }
-    if (changes?.length) {
-      wastelandLayerDirty = true;
-      renderState.sceneDirty = true;
-    }
-  }
-
-  function composeSceneLayer() {
-    if (!gameData || !terrainCanvas.width || !terrainCanvas.height) return;
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    if (sceneCanvas.width !== width || sceneCanvas.height !== height) {
-      sceneCanvas.width = width;
-      sceneCanvas.height = height;
-    }
-    sceneContext.clearRect(0, 0, width, height);
-    sceneContext.drawImage(terrainCanvas, 0, 0, width, height);
-    if (wastelandCanvas.width === width && wastelandCanvas.height === height) {
-      sceneContext.drawImage(wastelandCanvas, 0, 0, width, height);
-    }
-    if (territoryCanvas.width === width && territoryCanvas.height === height) {
-      sceneContext.drawImage(territoryCanvas, 0, 0, width, height);
-    }
-    renderState.sceneDirty = true;
-  }
-
   function mapNeighbors(position) {
     return mapGeometry.mapNeighbors(position, gameData.map.width, gameData.map.height);
   }
 
   function drawHover() {
-    if (hoverPosition === null || selectedPosition !== null || !spawnPhase || selectionLocked || !isValidCapital(hoverPosition)) return;
-    const width = gameData.map.width;
-    const shape = getCapitalCells(hoverPosition);
-    const cellSet = new Set(shape);
-    dynamicContext.save();
-    dynamicContext.strokeStyle = '#f4d35e';
-    dynamicContext.lineWidth = 1;
-    dynamicContext.globalAlpha = 0.9;
-    for (const cell of shape) {
-      const x = cell % width;
-      const y = Math.floor(cell / width);
-      const hasEast = cellSet.has(cell + 1);
-      const hasWest = cellSet.has(cell - 1);
-      const hasNorth = cellSet.has(cell - width);
-      const hasSouth = cellSet.has(cell + width);
-      dynamicContext.beginPath();
-      if (!hasNorth) { dynamicContext.moveTo(x, y); dynamicContext.lineTo(x + 1, y); }
-      if (!hasEast) { dynamicContext.moveTo(x + 1, y); dynamicContext.lineTo(x + 1, y + 1); }
-      if (!hasSouth) { dynamicContext.moveTo(x + 1, y + 1); dynamicContext.lineTo(x, y + 1); }
-      if (!hasWest) { dynamicContext.moveTo(x, y + 1); dynamicContext.lineTo(x, y); }
-      dynamicContext.stroke();
-    }
-    dynamicContext.restore();
+    dynamicRenderer.draw();
   }
 
   function drawNukeTarget() {
-    if (!nukeMode || nukeTarget === null) return;
-    const width = gameData.map.width;
-    const x = nukeTarget % width;
-    const y = Math.floor(nukeTarget / width);
-    dynamicContext.save();
-    dynamicContext.strokeStyle = '#071221';
-    dynamicContext.fillStyle = 'rgba(232, 107, 82, 0.45)';
-    dynamicContext.lineWidth = 1.5;
-    dynamicContext.beginPath();
-    dynamicContext.arc(x + 0.5, y + 0.5, 8, 0, Math.PI * 2);
-    dynamicContext.fill();
-    dynamicContext.stroke();
-    dynamicContext.beginPath();
-    dynamicContext.moveTo(x - 11, y + 0.5);
-    dynamicContext.lineTo(x + 12, y + 0.5);
-    dynamicContext.moveTo(x + 0.5, y - 11);
-    dynamicContext.lineTo(x + 0.5, y + 12);
-    dynamicContext.stroke();
-    dynamicContext.restore();
+    dynamicRenderer.draw();
   }
-
-  function cubicPoint(start, firstControl, secondControl, end, progress) {
-    const inverse = 1 - progress;
-    const inverseSquared = inverse * inverse;
-    const progressSquared = progress * progress;
-    return {
-      x: inverseSquared * inverse * start.x + 3 * inverseSquared * progress * firstControl.x +
-        3 * inverse * progressSquared * secondControl.x + progressSquared * progress * end.x,
-      y: inverseSquared * inverse * start.y + 3 * inverseSquared * progress * firstControl.y +
-        3 * inverse * progressSquared * secondControl.y + progressSquared * progress * end.y
-    };
-  }
-
-  // ─── Nuke flight animation ────────────────────────────────────────────────
-  // Warhead: 3×3 pixel block — centre pixel glows red, outer 8 pixels flicker
-  // yellow like a star. Leaves a 1px-wide clean white trail along the arc.
-  // On impact the warhead vanishes immediately and a brief radial flash expands
-  // from the target to signal detonation before the wasteland renders.
-
-  let nukeImpactFlash = null; // { x, y, startedAt }
-  let nukeShake = null;       // { startedAt, durationMs, strength }
-  let nukeInbound = false;    // true while a nuke is flying toward local territory
 
   function drawNukeFlight(timestamp) {
-    // Draw lingering impact flash even after nukeFlight clears.
-    if (nukeImpactFlash) {
-      const FLASH_MS = 420;
-      const fp = Math.min(1, (timestamp - nukeImpactFlash.startedAt) / FLASH_MS);
-      if (fp < 1) {
-        const radius = fp * 32;
-        const alpha = (1 - fp) * 0.85;
-        dynamicContext.save();
-        // Outer bloom ring
-        const grad = dynamicContext.createRadialGradient(
-          nukeImpactFlash.x, nukeImpactFlash.y, 0,
-          nukeImpactFlash.x, nukeImpactFlash.y, radius
-        );
-        grad.addColorStop(0, `rgba(255,255,200,${alpha})`);
-        grad.addColorStop(0.35, `rgba(255,140,40,${alpha * 0.7})`);
-        grad.addColorStop(1, 'rgba(255,60,20,0)');
-        dynamicContext.globalAlpha = 1;
-        dynamicContext.fillStyle = grad;
-        dynamicContext.beginPath();
-        dynamicContext.arc(nukeImpactFlash.x, nukeImpactFlash.y, radius, 0, Math.PI * 2);
-        dynamicContext.fill();
-        // Hard white core that shrinks as it fades
-        dynamicContext.globalAlpha = Math.max(0, 1 - fp * 3);
-        dynamicContext.fillStyle = '#ffffff';
-        dynamicContext.fillRect(
-          nukeImpactFlash.x - 2, nukeImpactFlash.y - 2, 4, 4
-        );
-        dynamicContext.restore();
-        renderState.dynamicDirty = true;
-      } else {
-        nukeImpactFlash = null;
-      }
-    }
-
     if (!nukeFlight) return;
-
-    const mapWidth = gameData.map.width;
-    const start = {
-      x: nukeFlight.start % mapWidth + 0.5,
-      y: Math.floor(nukeFlight.start / mapWidth) + 0.5
-    };
-    const end = {
-      x: nukeFlight.target % mapWidth + 0.5,
-      y: Math.floor(nukeFlight.target / mapWidth) + 0.5
-    };
+    const width = gameData.map.width;
+    const start = { x: nukeFlight.start % width + 0.5, y: Math.floor(nukeFlight.start / width) + 0.5 };
+    const end = { x: nukeFlight.target % width + 0.5, y: Math.floor(nukeFlight.target / width) + 0.5 };
     const deltaX = end.x - start.x;
     const deltaY = end.y - start.y;
     const distance = Math.hypot(deltaX, deltaY);
-
-    // Arc: always lifts away from the midpoint toward the least-crowded edge,
-    // capped so the path never leaves the map canvas.
-    const requestedArcHeight = Math.max(40, distance / 2.8);
+    const requestedArcHeight = Math.max(50, distance / 3);
     const upwardRoom = Math.min(start.y, end.y) - 0.5;
     const downwardRoom = gameData.map.height - 0.5 - Math.max(start.y, end.y);
     const arcSign = upwardRoom >= downwardRoom ? -1 : 1;
     const availableRoom = Math.max(1, arcSign < 0 ? upwardRoom : downwardRoom);
-    const arcHeight = Math.min(requestedArcHeight, availableRoom * 0.85);
-
-    // Cubic Bézier control points — asymmetric so the warhead launches steeply
-    // and arrives at a shallow dive angle, matching real ICBM trajectories.
-    const ctrl1 = {
-      x: start.x + deltaX * 0.2,
-      y: clamp(start.y + deltaY * 0.05 + arcSign * arcHeight, 0.5, gameData.map.height - 0.5)
+    const arcHeight = Math.min(requestedArcHeight, availableRoom);
+    const firstControl = {
+      x: start.x + deltaX / 4,
+      y: clamp(start.y + deltaY / 4 + arcSign * arcHeight, 0.5, gameData.map.height - 0.5)
     };
-    const ctrl2 = {
-      x: start.x + deltaX * 0.75,
-      y: clamp(start.y + deltaY * 0.6 + arcSign * arcHeight * 0.7, 0.5, gameData.map.height - 0.5)
+    const secondControl = {
+      x: start.x + deltaX * 3 / 4,
+      y: clamp(start.y + deltaY * 3 / 4 + arcSign * arcHeight, 0.5, gameData.map.height - 0.5)
     };
-
     const progress = Math.min(1, (timestamp - nukeFlight.startedAt) / nukeFlight.durationMs);
+    const trailStart = Math.max(0, progress - 0.22);
+    const position = nukeGeometry.cubicPoint(start, firstControl, secondControl, end, progress);
+    const previous = nukeGeometry.cubicPoint(start, firstControl, secondControl, end, Math.max(0, progress - 0.02));
+    const angle = Math.atan2(position.y - previous.y, position.x - previous.x);
 
-    // ── Trail ──────────────────────────────────────────────────────────────
-    // Persistent full arc from launch, fading near the head. 1px-wide, white.
     dynamicContext.save();
     dynamicContext.lineCap = 'round';
-    dynamicContext.lineJoin = 'round';
-
-    const TRAIL_SEGMENTS = 48;
-    for (let i = 0; i < TRAIL_SEGMENTS; i++) {
-      const t0 = (i / TRAIL_SEGMENTS) * progress;
-      const t1 = ((i + 1) / TRAIL_SEGMENTS) * progress;
-      // Normalised segment position along the already-drawn trail [0..1]
-      const tNorm = (i + 0.5) / TRAIL_SEGMENTS;
-      // Fade: opaque at the back, nearly invisible just behind the head
-      const alpha = 0.18 + tNorm * (0.62 - tNorm * 0.62);
-      const p0 = cubicPoint(start, ctrl1, ctrl2, end, t0);
-      const p1 = cubicPoint(start, ctrl1, ctrl2, end, t1);
-      dynamicContext.globalAlpha = alpha;
+    const trailSamples = 16;
+    for (let index = 0; index < trailSamples; index += 1) {
+      const segmentStart = trailStart + (progress - trailStart) * index / trailSamples;
+      const segmentEnd = trailStart + (progress - trailStart) * (index + 1) / trailSamples;
+      const trailPoint = nukeGeometry.cubicPoint(start, firstControl, secondControl, end, segmentStart);
+      const nextTrailPoint = nukeGeometry.cubicPoint(start, firstControl, secondControl, end, segmentEnd);
+      dynamicContext.globalAlpha = 0.12 + index / trailSamples * 0.72;
       dynamicContext.strokeStyle = '#ffffff';
-      dynamicContext.lineWidth = 1;
+      dynamicContext.lineWidth = 1.1 + index / trailSamples;
       dynamicContext.beginPath();
-      dynamicContext.moveTo(p0.x, p0.y);
-      dynamicContext.lineTo(p1.x, p1.y);
+      dynamicContext.moveTo(trailPoint.x, trailPoint.y);
+      dynamicContext.lineTo(nextTrailPoint.x, nextTrailPoint.y);
       dynamicContext.stroke();
     }
 
-    // -- Warhead ---------------------------------------------------------------
-    // 5x5 pixel block (~60% bigger than original 3x3).
-    // Centre pixel = solid red core. Inner ring = orange-red pulse.
-    // Outer ring = flickering yellow star shimmer.
-    if (progress < 1) {
-      const pos = cubicPoint(start, ctrl1, ctrl2, end, progress);
-      const px = Math.round(pos.x - 2.5); // top-left of the 5x5 block
-      const py = Math.round(pos.y - 2.5);
-
-      const t = timestamp / 1000;
-      dynamicContext.globalAlpha = 1;
-
-      // Outer ring -- 16 cells along the 5x5 perimeter, flickering yellow star
-      const outerRing = [
-        [0,0],[1,0],[2,0],[3,0],[4,0],
-        [0,1],                  [4,1],
-        [0,2],                  [4,2],
-        [0,3],                  [4,3],
-        [0,4],[1,4],[2,4],[3,4],[4,4]
-      ];
-      for (let s = 0; s < outerRing.length; s++) {
-        const [ox, oy] = outerRing[s];
-        const flicker = 0.50 + 0.50 * Math.sin(t * 28 + s * 1.1);
-        dynamicContext.globalAlpha = flicker;
-        const g = Math.round(170 + 85 * flicker);
-        dynamicContext.fillStyle = `rgb(255,${g},0)`;
-        dynamicContext.fillRect(px + ox, py + oy, 1, 1);
-      }
-
-      // Inner ring -- 3x3 without corners, warm orange-red, subtly pulsing
-      const innerRing = [
-        [1,1],[2,1],[3,1],
-        [1,2],      [3,2],
-        [1,3],[2,3],[3,3]
-      ];
-      for (let s = 0; s < innerRing.length; s++) {
-        const [ox, oy] = innerRing[s];
-        const pulse = 0.75 + 0.25 * Math.sin(t * 20 + s * 0.9);
-        dynamicContext.globalAlpha = pulse;
-        dynamicContext.fillStyle = `rgb(255,${Math.round(80 + 40 * pulse)},10)`;
-        dynamicContext.fillRect(px + ox, py + oy, 1, 1);
-      }
-
-      // Centre pixel -- deep red, always fully opaque
-      dynamicContext.globalAlpha = 1;
-      dynamicContext.fillStyle = '#cc1111';
-      dynamicContext.fillRect(px + 2, py + 2, 1, 1);
-
-      // Radial halo -- scaled up to match the larger block
-      dynamicContext.globalAlpha = 0.28 + 0.12 * Math.sin(t * 18);
-      const halo = dynamicContext.createRadialGradient(
-        pos.x, pos.y, 0, pos.x, pos.y, 5.5
-      );
-      halo.addColorStop(0, 'rgba(255,200,40,0.9)');
-      halo.addColorStop(1, 'rgba(255,80,0,0)');
-      dynamicContext.fillStyle = halo;
-      dynamicContext.beginPath();
-      dynamicContext.arc(pos.x, pos.y, 5.5, 0, Math.PI * 2);
-      dynamicContext.fill();
-    }
-
+    dynamicContext.translate(position.x, position.y);
+    dynamicContext.rotate(angle);
+    dynamicContext.globalAlpha = 1;
+    dynamicContext.fillStyle = '#f4f3ea';
+    dynamicContext.strokeStyle = '#071221';
+    dynamicContext.lineWidth = 0.9;
+    dynamicContext.beginPath();
+    dynamicContext.moveTo(7, 0);
+    dynamicContext.lineTo(2, -2);
+    dynamicContext.lineTo(-5, -1.5);
+    dynamicContext.lineTo(-7, 0);
+    dynamicContext.lineTo(-5, 1.5);
+    dynamicContext.lineTo(2, 2);
+    dynamicContext.closePath();
+    dynamicContext.fill();
+    dynamicContext.stroke();
+    dynamicContext.fillStyle = '#e86b52';
+    dynamicContext.fillRect(-3, -1, 3, 2);
     dynamicContext.restore();
 
-    // ── Impact ─────────────────────────────────────────────────────────────
     if (progress >= 1) {
-      // Warhead disappears instantly — spawn the flash and screen shake.
-      if (!nukeImpactFlash) {
-        nukeImpactFlash = { x: end.x, y: end.y, startedAt: timestamp };
-        nukeShake = { startedAt: timestamp, durationMs: 600, strength: 5 };
-      }
-      clearNukeInbound();
       nukeFlight = null;
       nukeLaunch.disabled = true;
       nukeSelectTarget.disabled = false;
@@ -1086,337 +292,39 @@
     }
   }
 
-  // ── Nuke-inbound detection (client-side only) ─────────────────────────────
-  // Mirrors the server's getImpactCells circle logic to check if the local
-  // player's territory overlaps the blast radius — no server message needed.
-  const NUKE_RADIUS_CLIENT = 30;
-  const nukeCircleOffsets = [];
-  for (let oy = -NUKE_RADIUS_CLIENT; oy <= NUKE_RADIUS_CLIENT; oy += 1) {
-    const w = Math.round(Math.sqrt(NUKE_RADIUS_CLIENT ** 2 - oy ** 2));
-    nukeCircleOffsets.push({ oy, minX: -w, maxX: w });
-  }
-
-  function isNukeTargetingLocalPlayer(targetPosition) {
-    if (!gameData?.owners || !localPlayerId) return false;
-    const mapWidth = gameData.map.width;
-    const mapHeight = gameData.map.height;
-    const localOwnerId = Number(localPlayerId.replace('player-', ''));
-    const centerX = targetPosition % mapWidth;
-    const centerY = Math.floor(targetPosition / mapWidth);
-    for (const row of nukeCircleOffsets) {
-      const y = centerY + row.oy;
-      if (y < 0 || y >= mapHeight) continue;
-      const minX = Math.max(0, centerX + row.minX);
-      const maxX = Math.min(mapWidth - 1, centerX + row.maxX);
-      for (let x = minX; x <= maxX; x += 1) {
-        if (gameData.owners[y * mapWidth + x] === localOwnerId) return true;
-      }
-    }
-    return false;
-  }
-
-  function showNukeInbound() {
-    nukeInbound = true;
-    if (nukeInboundBanner) nukeInboundBanner.hidden = false;
-    if (nukeVignette) nukeVignette.hidden = false;
-  }
-
-  function clearNukeInbound() {
-    nukeInbound = false;
-    if (nukeInboundBanner) nukeInboundBanner.hidden = true;
-    if (nukeVignette) nukeVignette.hidden = true;
-  }
-
   function startNukeFlight(data) {
-    // Accept both {startPosition, targetPosition} (multiplayer + fixed offline)
-    // and the legacy {start, target} shape as a fallback.
-    const startPos = data?.startPosition ?? data?.start;
-    const targetPos = data?.targetPosition ?? data?.target;
-    if (!gameData || !Number.isInteger(startPos) || !Number.isInteger(targetPos)) return;
+    if (!gameData || !Number.isInteger(data?.start) || !Number.isInteger(data?.target)) return;
     nukeFlight = {
-      start: startPos,
-      target: targetPos,
+      start: data.start,
+      target: data.target,
       startedAt: performance.now(),
       durationMs: Math.max(3750, Number(data.durationMs) || 3750)
     };
-    // Client-side detection: show NUKE INBOUND if blast radius overlaps our territory.
-    if (isNukeTargetingLocalPlayer(targetPos)) showNukeInbound();
     invalidateDynamic();
   }
 
-  // Cached references for leaderboard — avoids querySelector on every render.
-  let _lbList = null;
-  let _lbTitle = null;
-
-  function renderLeaderboard(force = false) {
-    if (!gameData?.players || !leaderboard) return;
-    const now = performance.now();
-    if (!force && now - leaderboardAt < LEADERBOARD_INTERVAL_MS) return;
-    leaderboardAt = now;
-    const ranked = [...gameData.players]
-      .filter((player) => player.isAlive !== false && (player.territorySize || 0) > 0)
-      .sort((a, b) =>
-      (b.territorySize || 0) - (a.territorySize || 0) || (b.troops || 0) - (a.troops || 0));
-    const rankedEntries = ranked.map((player, index) => ({ player, index }));
-    const localIndex = ranked.findIndex((player) => player.playerId === localPlayerId);
-    const displayEntries = rankedEntries.slice(0, 9);
-    if (localIndex >= 9) displayEntries.push(rankedEntries[localIndex]);
-
-    // One-time scaffold — only built on the very first render.
-    if (!_lbList) {
-      leaderboard.innerHTML = '<div class="leaderboard-title">LEADERBOARD</div><div class="leaderboard-list"></div>';
-      _lbTitle = leaderboard.querySelector('.leaderboard-title');
-      _lbList = leaderboard.querySelector('.leaderboard-list');
-    }
-
-    // Diff existing rows against the new display list.
-    // Rows are keyed by playerId stored in dataset.playerId.
-    // Strategy: walk both the current DOM children and the new entries in
-    // parallel, updating text in-place where the key matches, inserting new
-    // rows where needed, and removing surplus rows at the end.
-    // This avoids destroying and recreating all rows + event listeners on
-    // every economy tick (previously every ~1 s with 250 players).
-    const existingRows = _lbList.children;
-    for (let i = 0; i < displayEntries.length; i += 1) {
-      const { player, index } = displayEntries[i];
-      const isLocal = player.playerId === localPlayerId;
-      const wantedClass = `leaderboard-row${isLocal ? ' is-local' : ''}`;
-
-      if (i < existingRows.length) {
-        // Reuse the existing row — update only what changed.
-        const row = existingRows[i];
-        if (row.dataset.playerId !== player.playerId) {
-          // Different player in this slot — re-key and rebind the click.
-          row.dataset.playerId = player.playerId;
-          row.title = `Focus ${player.playerName || player.playerId}`;
-          // Replace listeners by cloning the node without listeners, then
-          // re-attaching. Cheaper than removeEventListener when playerId swaps.
-          const fresh = row.cloneNode(true);
-          fresh.dataset.playerId = player.playerId;
-          fresh.title = `Focus ${player.playerName || player.playerId}`;
-          fresh.addEventListener('click', () => focusPlayer(player.playerId));
-          fresh.addEventListener('keydown', (event) => {
-            if (event.key !== 'Enter' && event.key !== ' ') return;
-            event.preventDefault();
-            focusPlayer(player.playerId);
-          });
-          _lbList.replaceChild(fresh, row);
-          // existingRows is live — the replaced node is now fresh at index i.
-        }
-        const current = existingRows[i];
-        if (current.className !== wantedClass) current.className = wantedClass;
-        const rank = current.querySelector('.leaderboard-rank');
-        const name = current.querySelector('.leaderboard-name');
-        const values = current.querySelector('.leaderboard-values');
-        const wantedRank = `${index + 1}.`;
-        const wantedName = player.playerName || player.playerId;
-        const wantedValues = formatTroops(player.territorySize || 0);
-        if (rank && rank.textContent !== wantedRank) rank.textContent = wantedRank;
-        if (name && name.textContent !== wantedName) name.textContent = wantedName;
-        if (values && values.textContent !== wantedValues) values.textContent = wantedValues;
-      } else {
-        // New row needed — build and append.
-        const row = document.createElement('div');
-        row.className = wantedClass;
-        row.dataset.playerId = player.playerId;
-        row.tabIndex = 0;
-        row.setAttribute('role', 'button');
-        row.title = `Focus ${player.playerName || player.playerId}`;
-        row.addEventListener('click', () => focusPlayer(player.playerId));
-        row.addEventListener('keydown', (event) => {
-          if (event.key !== 'Enter' && event.key !== ' ') return;
-          event.preventDefault();
-          focusPlayer(player.playerId);
-        });
-        row.innerHTML = `<span class="leaderboard-rank">${index + 1}.</span><span class="leaderboard-name"></span><span class="leaderboard-values">${formatTroops(player.territorySize || 0)}</span>`;
-        row.querySelector('.leaderboard-name').textContent = player.playerName || player.playerId;
-        _lbList.appendChild(row);
-      }
-    }
-    // Remove surplus rows (players that dropped off the display list).
-    while (_lbList.children.length > displayEntries.length) {
-      _lbList.removeChild(_lbList.lastChild);
-    }
-  }
-
   function rebuildPlayerMap() {
-    playerMap.clear();
-    for (const player of gameData?.players || []) playerMap.set(player.playerId, player);
-  }
-
-  function attackMergeKey(attack) {
-    const targetOwnerId = Number(attack.targetOwnerId) || 0;
-    return targetOwnerId ? `owner-${targetOwnerId}` : `neutral-${attack.playerId}`;
+    playerRegistry.rebuild(gameData?.players || []);
   }
 
   function updateActiveAttacks(attacks) {
-    activeAttacks = attacks || [];
-    if (!activeAttacksPanel) return;
-    const mergedMap = new Map();
-    for (const attack of activeAttacks) {
-      if (attack.playerId !== localPlayerId || attack.troops <= 0) continue;
-      const key = attackMergeKey(attack);
-      if (mergedMap.has(key)) {
-        const merged = mergedMap.get(key);
-        merged.troops += attack.troops;
-        merged.attackIds.push(attack.id);
-      } else mergedMap.set(key, { ...attack, attackIds: [attack.id] });
-    }
-
-    const mergedAttacks = [...mergedMap.values()];
-    const existingCards = new Map(
-      [...activeAttacksPanel.querySelectorAll('.active-attack-card')]
-        .map((card) => [card.dataset.key, card])
-    );
-    const seenKeys = new Set();
-    mergedAttacks
-      .filter((attack) => attack.playerId === localPlayerId && attack.troops > 0)
-      .forEach((attack) => {
-        const key = attackMergeKey(attack);
-        seenKeys.add(key);
-        const previousTroops = attackCardState.get(key)?.troops;
-        if (existingCards.has(key)) {
-          const card = existingCards.get(key);
-          card.querySelector('.active-attack-troops').textContent = `${formatTroops(attack.troops)} troops`;
-          card.querySelector('.active-attack-cancel').onclick = () => {
-            for (const attackId of attack.attackIds) {
-              window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId, attackId));
-            }
-          };
-          if (previousTroops !== undefined && attack.troops > previousTroops) {
-            const gain = card.querySelector('.active-attack-gain');
-            const gainState = attackCardState.get(key);
-            gain.textContent = `+ ${formatTroops(attack.troops - previousTroops)}`;
-            gain.classList.remove('is-fading');
-            clearTimeout(gainState.fadeTimer);
-            gainState.fadeTimer = setTimeout(() => gain.classList.add('is-fading'), 1800);
-          }
-          attackCardState.set(key, { ...attackCardState.get(key), troops: attack.troops, attackIds: attack.attackIds });
-          return;
-        }
-        const card = document.createElement('div');
-        card.className = 'active-attack-card';
-        card.dataset.key = key;
-        const count = document.createElement('span');
-        count.className = 'active-attack-troops';
-        count.textContent = `${formatTroops(attack.troops)} troops`;
-        const gain = document.createElement('span');
-        gain.className = 'active-attack-gain is-fading';
-        const cancel = document.createElement('button');
-        cancel.className = 'active-attack-cancel';
-        cancel.type = 'button';
-        cancel.setAttribute('aria-label', 'Cancel attack');
-        cancel.textContent = 'x';
-        card.append(count, gain, cancel);
-        activeAttacksPanel.appendChild(card);
-        cancel.onclick = () => {
-          for (const attackId of attack.attackIds) {
-            window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(localPlayerId, attackId));
-          }
-        };
-        attackCardState.set(key, { troops: attack.troops, attackIds: attack.attackIds, fadeTimer: null });
-      });
-    for (const [key, card] of existingCards) {
-      if (!seenKeys.has(key)) {
-        card.remove();
-        const state = attackCardState.get(key);
-        if (state) clearTimeout(state.fadeTimer);
-        attackCardState.delete(key);
-      }
-    }
-    for (const [key, state] of attackCardState) {
-      if (seenKeys.has(key)) continue;
-      if (state.fadeTimer) clearTimeout(state.fadeTimer);
-      attackCardState.delete(key);
-    }
+    activeAttacksRenderer.render(attacks, localPlayerId);
   }
 
   function updateLocalTroops(player) {
-    if (!player) return;
-    targetTroops = player.troops || 0;
-    const selectorTroopCount = document.getElementById('selector-troop-count');
-    const selectorTerritory = document.getElementById('selector-territory');
-    const selectorDensity = document.getElementById('selector-density');
-    const selectorStats = document.getElementById('selector-stats');
-    if (selectorStats) selectorStats.hidden = false;
-    if (selectorTroopCount) selectorTroopCount.textContent = formatTroops(player.troops || 0);
-    if (selectorTerritory) selectorTerritory.textContent = formatTroops(player.territorySize || 0);
-    if (selectorDensity) {
-      const density = player.territorySize > 0
-        ? (player.troops / player.territorySize).toFixed(2)
-        : '0.00';
-      selectorDensity.textContent = density;
-    }
-    updateRatioDisplay();
+    playerStatsRenderer.render(player);
   }
 
   function drawScene() {
-    if (!gameData || !terrain) return;
-    if (webglRenderer) {
-      if (renderState.sceneDirty) webglRenderer.draw();
-      renderState.sceneDirty = false;
-      return;
-    }
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    if (territoryLayerDirty || wastelandLayerDirty) {
-      if (dirtyMinX <= dirtyMaxX && dirtyMinY <= dirtyMaxY) {
-        const dirtyWidth = dirtyMaxX - dirtyMinX + 1;
-        const dirtyHeight = dirtyMaxY - dirtyMinY + 1;
-        // During heavy expansion phases (all bots attacking simultaneously)
-        // the dirty rect can expand to cover most of the map. At that point
-        // the partial-blit path has nearly the same cost as a full redraw but
-        // with extra arithmetic overhead. Fall back to a full putImageData
-        // when the dirty region exceeds 60 % of either map dimension.
-        const useFullBlit = dirtyWidth > width * 0.6 || dirtyHeight > height * 0.6;
-        if (useFullBlit) {
-          if (territoryLayerDirty) territoryContext.putImageData(territoryImageData, 0, 0);
-          if (wastelandLayerDirty) wastelandContext.putImageData(wastelandImageData, 0, 0);
-          sceneContext.clearRect(0, 0, width, height);
-          sceneContext.drawImage(terrainCanvas, 0, 0, width, height);
-          sceneContext.drawImage(wastelandCanvas, 0, 0, width, height);
-          sceneContext.drawImage(territoryCanvas, 0, 0, width, height);
-        } else {
-          if (territoryLayerDirty) territoryContext.putImageData(territoryImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-          if (wastelandLayerDirty) wastelandContext.putImageData(wastelandImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-          sceneContext.clearRect(dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-          sceneContext.drawImage(terrainCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-          sceneContext.drawImage(wastelandCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-          sceneContext.drawImage(territoryCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-        }
-      }
-      dirtyMinX = Infinity;
-      dirtyMinY = Infinity;
-      dirtyMaxX = -Infinity;
-      dirtyMaxY = -Infinity;
-      territoryLayerDirty = false;
-      wastelandLayerDirty = false;
-    }
-    if (!renderState.sceneDirty) return;
-    context.clearRect(0, 0, width, height);
-    context.drawImage(sceneCanvas, 0, 0, width, height);
-    renderState.sceneDirty = false;
+    sceneRenderer.draw();
   }
 
   function drawDynamic() {
-    if (!gameData || !terrain || !renderState.dynamicDirty) return;
-    const width = gameData.map.width;
-    const height = gameData.map.height;
-    dynamicContext.clearRect(0, 0, width, height);
-    if (spawnPhase) drawSpawnCapitals();
-    drawBoats();
-    drawHover();
-    drawNukeTarget();
-    drawNukeFlight(performance.now());
-    renderState.dynamicDirty = false;
+    dynamicRenderer.draw();
   }
 
   function scheduleDynamicDraw() {
-    if (dynamicDrawFrame !== null) return;
-    dynamicDrawFrame = requestAnimationFrame(() => {
-      dynamicDrawFrame = null;
-      drawDynamic();
-    });
+    dynamicScheduler.schedule();
   }
 
   function drawSpawnCapitals() {
@@ -1437,7 +345,7 @@
     for (const boat of boats) {
       const x = boat.position % width;
       const y = Math.floor(boat.position / width);
-      const colors = warFrontPlayerColors(playerColors.get(boat.ownerId) || '#f4d35e');
+      const colors = colorCache.playerColors(playerColors.get(boat.ownerId) || '#f4d35e');
       dynamicContext.fillStyle = colors.territory;
       dynamicContext.fillRect(x - 1, y - 1, 3, 3);
       dynamicContext.fillStyle = colors.border;
@@ -1447,25 +355,15 @@
   }
 
   function drawLabels() {
-    if (!gameData || !terrain) return;
-    labelTerritoryVersion = territoryVersion;
-    TerriPlayerLabelRenderer.draw(gameData, zoom, labelTerritoryVersion);
-    renderState.labelsDirty = false;
-    renderState.labelsCameraDirty = false;
-    lastLabelDrawAt = performance.now();
+    labelScheduler.draw();
   }
 
   function scheduleLabelDraw() {
-    renderState.labelsDirty = true;
-    if (labelDrawFrame !== null) return;
-    labelDrawFrame = requestAnimationFrame(() => {
-      labelDrawFrame = null;
-      if (gameData && terrain && renderState.labelsDirty && renderState.labelsCameraDirty) drawLabels();
-    });
+    labelScheduler.schedule();
   }
 
   function invalidateDynamic() {
-    renderState.dynamicDirty = true;
+    dynamicScheduler.invalidate();
   }
 
   function draw() {
@@ -1475,46 +373,254 @@
     drawLabels();
   }
 
+  const webglSync = modules.webglSync.createWebglSync({
+    renderer: webglRenderer,
+    renderState,
+    getGameData: () => gameData,
+    getWasteland: () => wasteland,
+    getPlayerColors: () => playerColors,
+    getSelectedColor: () => selectedColor
+  });
+  const colorCache = modules.colorCache.createColorCache({
+    colorUtils,
+    getGameData: () => gameData,
+    getPlayerColors: () => playerColors,
+    getSelectedColor: () => selectedColor
+  });
+  const ratioDisplay = modules.ratioDisplay.createRatioDisplay({ formatTroops });
+  const playerRegistry = modules.playerRegistry.createPlayerRegistry(playerMap);
+  const labelScheduler = modules.labelScheduler.createLabelScheduler({
+    renderer: TerriPlayerLabelRenderer,
+    renderState,
+    intervalMs: 500,
+    getGameData: () => gameData,
+    getTerrain: () => terrain,
+    getZoom: () => zoom,
+    getTerritoryVersion: () => territoryVersion
+  });
+  const sceneRenderer = modules.sceneRenderer.createSceneRenderer({
+    getGameData: () => gameData,
+    getTerrain: () => terrain,
+    getWasteland: () => wasteland,
+    terrainCanvas,
+    terrainContext,
+    wastelandCanvas,
+    wastelandContext,
+    territoryCanvas,
+    territoryContext,
+    sceneCanvas,
+    sceneContext,
+    context,
+    renderState,
+    webglRenderer,
+    webglSync,
+    colorCache,
+    changeBuffer,
+    getNeighbors: (position) => mapNeighbors(position)
+  });
+  const dynamicRenderer = modules.dynamicRenderer.createDynamicRenderer({
+    context: dynamicContext,
+    getState: () => ({
+      gameData,
+      terrain,
+      renderState,
+      spawnPhase,
+      selectionLocked,
+      selectedPosition,
+      selectedColor,
+      localPlayerId,
+      hoverPosition,
+      playerColors,
+      boats,
+      nukeMode,
+      nukeTarget
+    }),
+    getCapitalCells,
+    isValidCapital: (position) => mapRules.isValidCapital(position),
+    colorCache,
+    clamp,
+    nukeGeometry,
+    getNukeFlight: () => nukeFlight,
+    clearNukeFlight: () => { nukeFlight = null; },
+    onNukeImpact: () => {
+      nukeLaunch.disabled = true;
+      nukeSelectTarget.disabled = false;
+      nukeStatus.textContent = 'IMPACT REGISTERED // DAMAGE OFFLINE';
+    }
+  });
+  const dynamicScheduler = modules.dynamicScheduler.createDynamicScheduler({
+    renderState,
+    drawDynamic
+  });
+
+  const renderLoop = modules.renderLoop.createRenderLoop({
+    renderState,
+    getNukeFlight: () => nukeFlight,
+    getGameData: () => gameData,
+    updateWebglOwners: (changes) => webglSync.updateOwners(changes),
+    updateTerritoryLayer: (changes) => sceneRenderer.updateTerritory(changes),
+    onTerritoryChanged: () => {
+      territoryVersion += 1;
+      renderState.labelsDirty = true;
+    },
+    smoothTroops,
+    drawScene,
+    drawDynamic,
+    drawLabels,
+    shouldDrawLabels: () => renderState.labelsCameraDirty || labelScheduler.shouldDraw(),
+    resetInterpolation
+  });
+  const mapAssets = modules.mapAssets.createMapAssets();
+  const leaderboardRenderer = modules.leaderboard.createLeaderboardRenderer(
+    leaderboard,
+    (playerId) => focusPlayer(playerId)
+  );
+  const activeAttacksRenderer = modules.activeAttacks.createActiveAttacksRenderer(
+    activeAttacksPanel,
+    (playerId, attackId) => {
+      window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(playerId, attackId));
+    }
+  );
+  const playerStatsRenderer = modules.playerStats.createPlayerStatsRenderer({
+    setTargetTroops: (value) => { targetTroops = value; },
+    updateRatioDisplay
+  });
+  const spawnHudController = modules.spawnHud.createSpawnHud();
+  const attackRatioController = modules.attackRatio.createAttackRatioControl({
+    slider: powerSlider,
+    isActive: () => activeGame,
+    onChange: updateRatioDisplay
+  });
+  const mapMenuController = modules.mapMenu.createMapMenu({
+    menu: mapMenu,
+    screen: gameScreen,
+    onAction: (action, position) => {
+      if (action === 'attack') mapActionHandler?.({ playerId: localPlayerId, position });
+      if (action === 'boat') boatActionHandler?.({ playerId: localPlayerId, position });
+    }
+  });
+  const mapTransform = modules.mapTransform.createMapTransform({
+    mapFrame,
+    clamp,
+    getZoom: () => zoom,
+    setZoom: (value) => { zoom = value; },
+    getPan: () => ({ x: panX, y: panY }),
+    setPan: (value) => { panX = value.x; panY = value.y; },
+    onCameraChanged: () => {
+      renderState.labelsCameraDirty = true;
+      hideMapMenu();
+      TerriPlayerLabelRenderer.invalidateLayout();
+      scheduleLabelDraw();
+    }
+  });
+  const cameraController = modules.cameraController.createCameraController({
+    mapFrame,
+    canvas,
+    getState: () => ({ zoom, panX, panY }),
+    setState: (state) => { zoom = state.zoom; panX = state.panX; panY = state.panY; },
+    getMapSize: () => ({ width: gameData?.map.width || 876, height: gameData?.map.height || 694 }),
+    getLabelCenter: (playerId, version) => TerriPlayerLabelRenderer.getLabelCenter(playerId, gameData, version),
+    onTransform: () => {
+      renderState.labelsCameraDirty = true;
+      hideMapMenu();
+      TerriPlayerLabelRenderer.invalidateLayout();
+      scheduleLabelDraw();
+    }
+  });
+  const nukeControlsModule = modules.nukeControls;
+  const canvasResizer = modules.canvasResizer.createCanvasResizer({
+    mapFrame,
+    gameScreen,
+    canvas,
+    webglCanvas,
+    dynamicCanvas,
+    context,
+    dynamicContext,
+    webglRenderer,
+    getMapDimensions: () => ({
+      width: gameData?.map.width || 876,
+      height: gameData?.map.height || 694
+    }),
+    invalidateLabels: () => TerriPlayerLabelRenderer.invalidateLayout(),
+    hasTerrain: () => Boolean(terrain),
+    buildTerrainLayer: () => sceneRenderer.buildTerrain(),
+    composeSceneLayer: () => sceneRenderer.compose(),
+    draw,
+    applyMapTransform
+  });
+  const mapRules = modules.mapRules.createMapRules({
+    getState: () => ({ gameData, terrain, territoryVersion }),
+    getNeighbors: (position) => mapNeighbors(position)
+  });
+  const mapCoordinates = modules.mapCoordinates.createMapCoordinates(
+    canvas,
+    () => ({ width: gameData?.map.width || 876, height: gameData?.map.height || 694 })
+  );
+  const mapGestures = modules.mapGestures.createMapGestures({
+    mapFrame,
+    isBlocked: () => cameraController.isAnimating(),
+    getCamera: () => ({ zoom, panX, panY }),
+    setCamera: (camera) => { zoom = camera.zoom; panX = camera.panX; panY = camera.panY; },
+    clamp,
+    applyTransform: applyMapTransform,
+    onRatioAdjust: (step) => attackRatioController.adjust(step),
+    positionFromPointer: (event) => mapCoordinates.fromPointer(event),
+    onHover: (position) => { hoverPosition = position; },
+    invalidateDynamic,
+    scheduleDynamicDraw,
+    onTap: (event, position) => {
+      if (position === null) return;
+      if (spawnPhase && !selectionLocked) {
+        if (!mapRules.isValidCapital(position) || !isAvailableCapital(position)) {
+          spawnMessage.textContent = !isAvailableCapital(position)
+            ? 'INVALID POSITION // CAPITAL AREA IS OCCUPIED'
+            : 'INVALID POSITION // CAPITAL MUST BE ON LAND';
+          hoverPosition = null;
+          invalidateDynamic();
+          drawDynamic();
+          return;
+        }
+        selectedPosition = position;
+        selectedSpawnCells = getCapitalCells(position);
+        if (selectedSpawnCells.length !== 21 || !mapRules.isValidCapital(position) || !isAvailableCapital(position)) {
+          selectedSpawnCells = [];
+          spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
+          hoverPosition = null;
+          invalidateDynamic();
+          drawDynamic();
+          return;
+        }
+        selectedColor = playerColors.get(Number(localPlayerId.replace('player-', ''))) || randomColor();
+        spawnMessage.textContent = 'CAPITAL SELECTED // CLICK AGAIN TO REPLACE';
+        spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
+        return;
+      }
+      if (!activeGame) return;
+      if (nukeMode && nukeSelecting) {
+        nukeTarget = position;
+        nukeSelecting = false;
+        nukeStatus.textContent = 'TARGET LOCKED // READY TO LAUNCH';
+        nukeLaunch.disabled = false;
+        return;
+      }
+      const ownerId = Number(localPlayerId.replace('player-', ''));
+      if ((terrain[position] & 0x80) !== 0 && gameData.owners[position] !== ownerId) {
+        mapActionHandler?.({ playerId: localPlayerId, position });
+      }
+    }
+  });
+
   function randomColor() {
     const colors = ['#69c878', '#e86b52', '#6ba8e8', '#d9b84c', '#bb75d4', '#e889b1'];
     return colors[Math.floor(Math.random() * colors.length)];
   }
 
-  function positionFromPointer(event) {
-    const rectangle = canvas.getBoundingClientRect();
-    const localX = (event.clientX - rectangle.left) * (gameData.map.width / rectangle.width);
-    const localY = (event.clientY - rectangle.top) * (gameData.map.height / rectangle.height);
-    const mapX = Math.floor(localX);
-    const mapY = Math.floor(localY);
-    if (mapX < 0 || mapX >= gameData.map.width || mapY < 0 || mapY >= gameData.map.height) return null;
-    return mapY * gameData.map.width + mapX;
-  }
-
-  function updateSpawnTimer() {
-    if (!spawnPhase) return;
-    const remainingMs = Math.max(0, spawnPhase.deadline - Date.now());
-    const remainingSeconds = Math.ceil(remainingMs / 1000);
-    spawnTime.textContent = remainingSeconds;
-    const elapsedMs = Math.min(spawnPhase.durationMs, spawnPhase.durationMs - remainingMs);
-    progressBar.style.width = `${Math.max(0, elapsedMs / spawnPhase.durationMs) * 100}%`;
-    progressBar.classList.toggle('is-critical', remainingMs <= 5000);
-    if (remainingMs <= 1000 && !selectionLocked) {
-      selectionLocked = true;
-      spawnSubmitHandler?.({ playerId: spawnPhase.playerId, position: selectedPosition });
-    }
-    if (remainingMs === 0) {
-      clearInterval(timerHandle);
-      spawnMessage.textContent = 'SPAWN LOCKED // WAITING FOR SERVER';
-    }
-  }
-
+  /* Legacy gesture listeners are replaced by mapGestures below.
   mapFrame.addEventListener('wheel', function (event) {
-    if (eliminationAnimationFrame) return;
+    if (cameraController.isAnimating()) return;
     if (event.shiftKey) {
       event.preventDefault();
-      powerSlider.value = clamp(Number(powerSlider.value) + (event.deltaY > 0 ? -5 : 5), 1, 100);
-      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
-      updateRatioDisplay();
+      attackRatioController.adjust(event.deltaY > 0 ? -5 : 5);
       return;
     }
     event.preventDefault();
@@ -1533,7 +639,7 @@
   }, { passive: false });
 
   mapFrame.addEventListener('pointerdown', function (event) {
-    if (eliminationAnimationFrame) return;
+    if (cameraController.isAnimating()) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (activePointers.size === 2) {
@@ -1583,7 +689,7 @@
     panX = event.clientX - dragStart.x;
     panY = event.clientY - dragStart.y;
     applyMapTransform();
-    hoverPosition = positionFromPointer(event);
+    hoverPosition = mapCoordinates.fromPointer(event);
     invalidateDynamic();
     scheduleDynamicDraw();
   });
@@ -1608,10 +714,12 @@
     mapFrame.classList.remove('is-dragging');
     if (mapFrame.hasPointerCapture(event.pointerId)) mapFrame.releasePointerCapture(event.pointerId);
     if (wasClick && spawnPhase && !selectionLocked) {
-      const position = positionFromPointer(event);
+      const position = mapCoordinates.fromPointer(event);
       if (position !== null) {
-        if (!isValidCapital(position)) {
-          spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
+        if (!mapRules.isValidCapital(position) || !isAvailableCapital(position)) {
+          spawnMessage.textContent = !isAvailableCapital(position)
+            ? 'INVALID POSITION // CAPITAL AREA IS OCCUPIED'
+            : 'INVALID POSITION // CAPITAL MUST BE ON LAND';
           hoverPosition = null;
           invalidateDynamic();
           drawDynamic();
@@ -1619,7 +727,7 @@
         }
         selectedPosition = position;
         selectedSpawnCells = getCapitalCells(position);
-        if (selectedSpawnCells.length !== 21 || !isValidCapital(position)) {
+        if (selectedSpawnCells.length !== 21 || !mapRules.isValidCapital(position) || !isAvailableCapital(position)) {
           selectedSpawnCells = [];
           spawnMessage.textContent = 'INVALID POSITION // CAPITAL MUST BE ON LAND';
           hoverPosition = null;
@@ -1634,7 +742,7 @@
         drawDynamic();
       }
     } else if (wasClick && activeGame) {
-      const position = positionFromPointer(event);
+      const position = mapCoordinates.fromPointer(event);
       if (nukeMode && nukeSelecting) {
         if (position !== null) {
           nukeTarget = position;
@@ -1658,69 +766,19 @@
   }
 
   function hideMapMenu() {
-    if (mapMenu.hidden) return;
-    mapMenu.hidden = true;
-    menuPosition = null;
-  }
-
-  function playerHasWaterBorder(ownerId) {
-    if (localWaterBorderVersion === territoryVersion) return localPlayerHasWaterBorder;
-    localPlayerHasWaterBorder = false;
-    for (let position = 0; position < gameData.owners.length; position += 1) {
-      if (gameData.owners[position] !== ownerId) continue;
-      if (mapNeighbors(position).some((neighbor) => (terrain[neighbor] & 0x80) === 0)) {
-        localPlayerHasWaterBorder = true;
-        break;
-      }
-    }
-    localWaterBorderVersion = territoryVersion;
-    return localPlayerHasWaterBorder;
-  }
-
-  function targetNearWater(position, maxDistance = 10) {
-    const visited = new Set([position]);
-    const queue = [{ position, distance: 0 }];
-    let head = 0;
-    while (head < queue.length) {
-      const current = queue[head++];
-      const neighbors = mapNeighbors(current.position);
-      if (neighbors.some((neighbor) => (terrain[neighbor] & 0x80) === 0)) return true;
-      if (current.distance >= maxDistance) continue;
-      for (const neighbor of neighbors) {
-        if (visited.has(neighbor) || (terrain[neighbor] & 0x80) === 0) continue;
-        visited.add(neighbor);
-        queue.push({ position: neighbor, distance: current.distance + 1 });
-      }
-    }
-    return false;
+    mapMenuController.hide();
   }
 
   function showMapMenu(event, position) {
-    menuPosition = position;
-    const bounds = gameScreen.getBoundingClientRect();
-    mapMenu.hidden = false;
-    const attackButton = mapMenu.querySelector('[data-action="attack"]');
-    const boatButton = mapMenu.querySelector('[data-action="boat"]');
     const ownerId = Number(localPlayerId.replace('player-', ''));
-    const canLaunchBoat = targetNearWater(position) && playerHasWaterBorder(ownerId);
-    boatButton.hidden = !canLaunchBoat;
-    // Clamp so the menu never opens off the edge of the screen.
-    const width = mapMenu.offsetWidth || 34;
-    const height = mapMenu.offsetHeight || (canLaunchBoat ? 74 : 34);
-    const attackWidth = attackButton?.offsetWidth || 34;
-    const attackHeight = attackButton?.offsetHeight || 34;
-    const pointerX = event.clientX - bounds.left;
-    const pointerY = event.clientY - bounds.top;
-    const x = pointerX - attackWidth / 2;
-    const y = pointerY - attackHeight / 2;
-    mapMenu.style.left = `${Math.min(Math.max(4, x), Math.max(4, bounds.width - width - 4))}px`;
-    mapMenu.style.top = `${Math.min(Math.max(4, y), Math.max(4, bounds.height - height - 4))}px`;
+    const canLaunchBoat = mapRules.targetNearWater(position) && mapRules.playerHasWaterBorder(ownerId);
+    mapMenuController.show(event, position, canLaunchBoat);
   }
 
   mapFrame.addEventListener('contextmenu', function (event) {
     event.preventDefault();
     if (!activeGame || localPlayerId === null) return;
-    const position = positionFromPointer(event);
+    const position = mapCoordinates.fromPointer(event);
     const ownerId = Number(localPlayerId.replace('player-', ''));
     // Only offer the menu on land we do not already hold.
     if (position === null || (terrain[position] & 0x80) === 0 || gameData.owners[position] === ownerId) {
@@ -1730,37 +788,17 @@
     showMapMenu(event, position);
   });
 
-  mapMenu.addEventListener('click', function (event) {
-    const action = event.target.closest('.map-menu-item')?.dataset.action;
-    if (!action || menuPosition === null) return;
-    const position = menuPosition;
-    hideMapMenu();
-    if (action === 'attack') {
-      mapActionHandler?.({ playerId: localPlayerId, position });
-    } else if (action === 'boat') {
-      boatActionHandler?.({ playerId: localPlayerId, position });
-    }
-  });
-
-  document.addEventListener('pointerdown', function (event) {
-    if (mapMenu.hidden || mapMenu.contains(event.target)) return;
-    hideMapMenu();
-  });
-
-  window.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') hideMapMenu();
-  });
-
   mapFrame.addEventListener('pointerup', stopDragging);
   mapFrame.addEventListener('pointercancel', stopDragging);
-  window.addEventListener('resize', function () {
-    scheduleCanvasResize();
-    applyMapTransform();
-  });
+  */
 
-  powerSlider.addEventListener('input', function () {
-    localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
-    updateRatioDisplay();
+  function hideMapMenu() {
+    mapMenuController.hide();
+  }
+
+  window.addEventListener('resize', function () {
+    canvasResizer.schedule();
+    applyMapTransform();
   });
 
   function setNukeMode(enabled) {
@@ -1780,87 +818,39 @@
     drawDynamic();
   }
 
-  nukeTrigger.addEventListener('click', () => setNukeMode(true));
-  nukeSelectTarget.addEventListener('click', () => {
-    if (nukeFlight) return;
-    nukeSelecting = true;
-    nukeTarget = null;
-    nukeLaunch.disabled = true;
-    nukeStatus.textContent = 'SELECT A TARGET';
-    invalidateDynamic();
-    drawDynamic();
-  });
-  nukeLaunch.addEventListener('click', () => {
-    if (nukeTarget === null || nukeFlight) return;
-    const localPlayer = playerMap.get(localPlayerId);
-    const launchPosition = localPlayer?.spawnPosition ?? selectedPosition ?? confirmedPosition;
-    if (!Number.isInteger(launchPosition)) {
-      nukeStatus.textContent = 'CAPITAL POSITION UNAVAILABLE';
-      return;
-    }
-    const launch = { playerId: localPlayerId, start: launchPosition, target: nukeTarget };
-    if (nukeLaunchHandler) nukeLaunchHandler(launch);
-    else startNukeFlight(launch);
-    setNukeMode(false);
-  });
-  nukeCancel.addEventListener('click', () => {
-    nukeFlight = null;
-    setNukeMode(false);
-  });
-
-  const ratioTrack = document.querySelector('.ratio-bar-track');
-  if (ratioTrack) {
-    function ratioFromEvent(event) {
-      const rect = ratioTrack.getBoundingClientRect();
-      const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
-      return Math.max(1, Math.round(ratio * 100));
-    }
-    let draggingRatio = false;
-    ratioTrack.addEventListener('pointerdown', (event) => {
-      draggingRatio = true;
-      ratioTrack.setPointerCapture(event.pointerId);
-      powerSlider.value = ratioFromEvent(event);
-      updateRatioDisplay();
-    });
-    ratioTrack.addEventListener('pointermove', (event) => {
-      if (!draggingRatio) return;
-      powerSlider.value = ratioFromEvent(event);
-      updateRatioDisplay();
-    });
-    ratioTrack.addEventListener('pointerup', () => {
-      draggingRatio = false;
-      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
-    });
-    ratioTrack.addEventListener('pointercancel', () => {
-      draggingRatio = false;
-      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
-    });
-  }
-
-  document.getElementById('ratio-minus')?.addEventListener('click', () => {
-    powerSlider.value = Math.max(1, Number(powerSlider.value) - 5);
-    localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
-    updateRatioDisplay();
-  });
-  document.getElementById('ratio-plus')?.addEventListener('click', () => {
-    powerSlider.value = Math.min(100, Number(powerSlider.value) + 5);
-    localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
-    updateRatioDisplay();
-  });
-
-  window.addEventListener('keydown', function (event) {
-    if (!activeGame || event.target.tagName === 'INPUT') return;
-    if (event.key === '1') powerSlider.value = Math.max(1, Number(powerSlider.value) - 5);
-    if (event.key === '2') powerSlider.value = Math.min(100, Number(powerSlider.value) + 5);
-    if (event.key === '1' || event.key === '2') {
-      localStorage.setItem('terrifront-attack-ratio', powerSlider.value);
-      updateRatioDisplay();
+  nukeControlsModule.createNukeControls({
+    trigger: nukeTrigger,
+    selectTarget: nukeSelectTarget,
+    launch: nukeLaunch,
+    cancel: nukeCancel,
+    onEnable: () => setNukeMode(true),
+    onSelectTarget: () => {
+      if (nukeFlight) return;
+      nukeSelecting = true;
+      nukeTarget = null;
+      nukeLaunch.disabled = true;
+      nukeStatus.textContent = 'SELECT A TARGET';
+      invalidateDynamic();
+      drawDynamic();
+    },
+    onLaunch: () => {
+      if (nukeTarget === null || nukeFlight) return;
+      const localPlayer = playerMap.get(localPlayerId);
+      const launchPosition = localPlayer?.spawnPosition ?? selectedPosition ?? confirmedPosition;
+      if (!Number.isInteger(launchPosition)) {
+        nukeStatus.textContent = 'CAPITAL POSITION UNAVAILABLE';
+        return;
+      }
+      const launch = { playerId: localPlayerId, start: launchPosition, target: nukeTarget };
+      if (nukeLaunchHandler) nukeLaunchHandler(launch);
+      else startNukeFlight(launch);
+      setNukeMode(false);
+    },
+    onCancel: () => {
+      nukeFlight = null;
+      setNukeMode(false);
     }
   });
-
-  const savedRatio = localStorage.getItem('terrifront-attack-ratio');
-  if (savedRatio !== null && Number(savedRatio) >= 1 && Number(savedRatio) <= 100) powerSlider.value = savedRatio;
-  updateRatioDisplay();
 
   window.TerriGameUI = {
     onSpawnSubmit(handler) {
@@ -1877,9 +867,6 @@
       const sessionId = ++gameSessionId;
       gameData = data;
       nukeFlight = null;
-      nukeImpactFlash = null;
-      nukeShake = null;
-      clearNukeInbound();
       setNukeMode(false);
       territoryVersion = 0;
       displayTroops = 0;
@@ -1892,15 +879,12 @@
       wasteland = new Uint8Array(data.map.width * data.map.height);
       wastelandCanvas.width = data.map.width;
       wastelandCanvas.height = data.map.height;
-      labelTerritoryVersion = -1;
-      updateWebglOwners();
-      updateWebglWasteland();
-      updateWebglPalette();
+      webglSync.updateOwners();
+      webglSync.updateWasteland();
+      webglSync.updatePalette();
       territoryCanvas.width = data.map.width;
       territoryCanvas.height = data.map.height;
-      wastelandImageData = wastelandContext.createImageData(data.map.width, data.map.height);
-      territoryImageData = territoryContext.createImageData(data.map.width, data.map.height);
-      territoryContext.putImageData(territoryImageData, 0, 0);
+      sceneRenderer.reset();
       terrain = null;
       expansionTimes = null;
       context.clearRect(0, 0, data.map.width, data.map.height);
@@ -1911,9 +895,7 @@
       renderState.labelsDirty = true;
       renderState.labelsCameraDirty = true;
       boats.length = 0;
-      playerColorCache = new Map();
-      localWaterBorderVersion = -1;
-      lastLabelDrawAt = 0;
+      colorCache.clear();
       loadTerrain(data.map, sessionId).catch((error) => {
         if (sessionId !== gameSessionId) return;
         console.error('Unable to load terrain map:', error);
@@ -1938,10 +920,9 @@
       localPlayerWon = false;
       winnerBanner.textContent = 'WINNER';
       winnerBanner.hidden = true;
-      if (eliminationAnimationFrame) cancelAnimationFrame(eliminationAnimationFrame);
-      eliminationAnimationFrame = null;
+      cameraController.cancel();
       resetMapTransform();
-      scheduleCanvasResize();
+      canvasResizer.schedule();
     },
     beginSpawnPhase(data) {
       activeGame = false;
@@ -1963,22 +944,24 @@
         const localOwnerId = Number(localPlayerId.replace('player-', ''));
         if (!selectedColor || selectedColor === '#8b9298') selectedColor = playerColors.get(localOwnerId) || '#69c878';
       }
-      updateWebglPalette();
-      const spawnChanges = decodeChangesBuf(data);
+      webglSync.updatePalette();
+      const spawnChanges = changeBuffer.decode(data);
       if (spawnChanges.length) {
-        forEachChange(spawnChanges, (position, owner) => { gameData.owners[position] = owner; });
-        updateWebglOwners(spawnChanges);
-        updateTerritoryLayer(spawnChanges);
+        changeBuffer.forEach(spawnChanges, (position, owner) => { gameData.owners[position] = owner; });
+        webglSync.updateOwners(spawnChanges);
+        sceneRenderer.updateTerritory(spawnChanges);
         territoryVersion += 1;
         renderState.labelsDirty = true;
       }
       selectedSpawnCells = [];
       selectionLocked = false;
-      spawnHud.hidden = false;
-      spawnMessage.textContent = 'CHOOSE A LAND POSITION FOR YOUR CAPITAL';
-      clearInterval(timerHandle);
-      updateSpawnTimer();
-      timerHandle = setInterval(updateSpawnTimer, 50);
+      spawnHudController.show();
+      spawnHudController.setMessage('CHOOSE A LAND POSITION FOR YOUR CAPITAL');
+      spawnHudController.start(data, () => {
+        if (selectionLocked) return;
+        selectionLocked = true;
+        spawnSubmitHandler?.({ playerId: data.playerId, position: selectedPosition ?? confirmedPosition });
+      });
       invalidateDynamic();
       draw();
     },
@@ -2006,14 +989,14 @@
       if (data.cells) {
         if (isLocalPlayer) selectedSpawnCells = [...data.cells];
         data.cells.forEach((cell) => { gameData.owners[cell] = confirmedOwnerId; });
-        updateWebglOwners([
+        webglSync.updateOwners([
           ...previousCells.map((position) => ({ position, owner: 0 })),
           ...data.cells.map((position) => ({ position, owner: confirmedOwnerId }))
         ]);
-        updateWebglPalette();
+        webglSync.updatePalette();
         territoryVersion += 1;
         renderState.labelsDirty = true;
-        updateTerritoryLayer([
+        sceneRenderer.updateTerritory([
           ...previousCells.map((position) => ({ position, owner: 0 })),
           ...data.cells.map((position) => ({ position, owner: confirmedOwnerId }))
         ]);
@@ -2033,17 +1016,13 @@
       drawDynamic();
     },
     startActiveGame(data) {
-      // Decode typed-array buffers from the offline worker's ACTIVE_GAME message.
-      if (data.playersBuf)   data.players           = decodePlayersBuf(data.playersBuf)   || data.players;
-      if (data.wastelandBuf) data.wastelandChanges   = decodeWastelandBuf(data.wastelandBuf);
-
       spawnPhase = null;
       activeGame = true;
       localPlayerEliminated = false;
       localPlayerWon = false;
       selectionLocked = true;
-      clearInterval(timerHandle);
-      spawnHud.hidden = true;
+      spawnHudController.stop();
+      spawnHudController.hide();
       document.getElementById('selector-stats').hidden = false;
       updateActiveAttacks(data.activeAttacks || []);
       attackRatioPanel.hidden = false;
@@ -2054,12 +1033,12 @@
         gameData.players = data.players;
         rebuildPlayerMap();
         data.players.forEach((player) => playerColors.set(Number(player.playerId.replace('player-', '')), player.capitalColor));
-        const activeChanges = decodeChangesBuf(data);
-        forEachChange(activeChanges, (position, owner) => { gameData.owners[position] = owner; });
-        updateWebglOwners(activeChanges);
-        updateWebglPalette();
+        const activeChanges = changeBuffer.decode(data);
+        changeBuffer.forEach(activeChanges, (position, owner) => { gameData.owners[position] = owner; });
+        webglSync.updateOwners(activeChanges);
+        webglSync.updatePalette();
         applyWastelandChanges(data.wastelandChanges || []);
-        rebuildTerritoryLayer();
+        sceneRenderer.rebuildTerritory();
         const player = data.players.find((item) => item.playerId === localPlayerId);
         localCapitalCells = new Set();
         if (player?.capitalColor) selectedColor = player.capitalColor;
@@ -2067,7 +1046,7 @@
         selectedPosition = player?.spawnPosition ?? null;
       }
       resetInterpolation();
-      renderLeaderboard(true);
+      leaderboardRenderer.render(gameData.players, localPlayerId, true);
       draw();
       startRenderLoop();
     },
@@ -2078,14 +1057,6 @@
       boatActionHandler = handler;
     },
     applyGameUpdate(data) {
-      // Decode typed-array buffers sent by the offline worker (zero-copy path).
-      // These replace the corresponding object-array fields in `data` so the
-      // rest of the function stays unchanged regardless of whether the update
-      // came from the offline worker or the multiplayer server.
-      if (data.playersBuf)   data.players          = decodePlayersBuf(data.playersBuf)   || data.players;
-      if (data.wastelandBuf) data.wastelandChanges  = decodeWastelandBuf(data.wastelandBuf);
-      if (data.boatsBuf)     data.boats             = decodeBoatsBuf(data.boatsBuf);
-
       const localPlayerBeforeAlive = (gameData?.players || []).find((player) => player.playerId === localPlayerId)?.isAlive !== false;
       const now = performance.now();
       if (lastPacketAt) {
@@ -2098,7 +1069,7 @@
       applyWastelandChanges(data.wastelandChanges || []);
       updateActiveAttacks(data.activeAttacks || []);
       if (hadBoats || boats.length) invalidateDynamic();
-      queueChanges(decodeChangesBuf(data));
+      renderLoop.queueChanges(changeBuffer.decode(data), packetIntervalMs);
       let leaderboardDirty = false;
       if (!playerMap.size && gameData?.players?.length) rebuildPlayerMap();
       for (const player of data.players || []) {
@@ -2130,12 +1101,11 @@
         }
         if (player.playerId === localPlayerId) updateLocalTroops(current || player);
       }
-      // NOTE: We do NOT rebuild gameData.players from playerMap here.
-      // playerMap values are the exact same object references that gameData.players
-      // already holds, so mutations via Object.assign above are already reflected.
-      // Rebuilding the array every packet (~50 ms) with 250 players was causing
-      // unnecessary allocations and GC pressure.
+      // Keep the rendered collection tied to the registry. This also handles
+      // update packets arriving before a complete player list is installed.
+      if (data.players?.length) gameData.players = [...playerMap.values()];
       const localPlayerAfter = playerMap.get(localPlayerId) || (gameData?.players || []).find((player) => player.playerId === localPlayerId);
+      if (localPlayerAfter) updateLocalTroops(localPlayerAfter);
       if (!localPlayerEliminated && localPlayerBeforeAlive && localPlayerAfter?.isAlive === false) {
         localPlayerEliminated = true;
         winnerBanner.textContent = 'LOST';
@@ -2158,9 +1128,9 @@
         animateMapToCenter();
       }
       updateRatioDisplay();
-      if (leaderboardDirty) renderLeaderboard();
+      if (leaderboardDirty) leaderboardRenderer.render(gameData.players, localPlayerId);
       renderState.labelsDirty = true;
-      if (!renderLoopRunning) draw();
+      if (!renderLoop.isRunning()) draw();
     },
     rejectExpansion(data) {
       spawnMessage.textContent = `EXPANSION REJECTED // ${data.reason}`;
@@ -2171,17 +1141,10 @@
       spawnPhase = null;
       activeGame = false;
       nukeFlight = null;
-      nukeImpactFlash = null;
-      nukeShake = null;
-      clearNukeInbound();
       setNukeMode(false);
       updateActiveAttacks([]);
       winnerBanner.hidden = true;
-      // Reset cached leaderboard DOM references so the next session rebuilds
-      // them fresh rather than pointing at nodes from the previous game.
-      _lbList = null;
-      _lbTitle = null;
-      leaderboard.innerHTML = '';
+      leaderboardRenderer.reset();
     }
   };
 }());

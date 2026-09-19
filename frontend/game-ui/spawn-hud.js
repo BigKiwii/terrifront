@@ -20,7 +20,7 @@
       const elapsedMs = Math.min(phase.durationMs, phase.durationMs - remainingMs);
       progressBar.style.width = `${Math.max(0, elapsedMs / phase.durationMs) * 100}%`;
       progressBar.classList.toggle('is-critical', remainingMs <= 5000);
-      if (remainingMs <= 1000 && !deadlineSubmitted) {
+      if (remainingMs <= 5000 && !deadlineSubmitted) {
         deadlineSubmitted = true;
         phase.onDeadline?.();
       }
