@@ -50,28 +50,13 @@
     function buildTerrain() {
       const gameData = options.getGameData();
       const terrain = options.getTerrain();
-      if (!gameData || !terrain || options.webglRenderer) return;
-      const { width, height } = dimensions();
-      options.terrainCanvas.width = width;
-      options.terrainCanvas.height = height;
-      const pixels = options.terrainContext.createImageData(width, height);
-      for (let position = 0; position < terrain.length; position += 1) {
-        const pixel = position * 4;
-        const land = (terrain[position] & 0x80) !== 0;
-        const magnitude = terrain[position] & 0x1f;
-        if (land) {
-          pixels.data[pixel] = 226 + Math.min(20, magnitude * 2);
-          pixels.data[pixel + 1] = 209 + Math.min(18, magnitude * 2);
-          pixels.data[pixel + 2] = 161 + Math.min(16, magnitude);
-        } else {
-          pixels.data[pixel] = 79 + Math.min(9, Math.floor(magnitude * 1.2));
-          pixels.data[pixel + 1] = 114 + Math.min(11, Math.floor(magnitude * 1.2));
-          pixels.data[pixel + 2] = 140 + Math.min(7, Math.floor(magnitude * 0.6));
-        }
-        pixels.data[pixel + 3] = 255;
+      if (!gameData || !terrain) return;
+      if (options.webglRenderer) {
+        options.webglRenderer.setTerrain(terrain, gameData.map.width, gameData.map.height);
+        options.renderState.sceneDirty = true;
+        return;
       }
-      options.terrainContext.putImageData(pixels, 0, 0);
-      compose();
+      throw new Error('Terrifront requires WebGL2 for map rendering');
     }
 
     function paintWastelandTile(position) {
@@ -128,50 +113,23 @@
         options.webglSync.updateOwners();
         return;
       }
-      const { width, height } = dimensions();
-      options.territoryCanvas.width = width;
-      options.territoryCanvas.height = height;
-      territoryImageData = options.territoryContext.createImageData(width, height);
-      for (let position = 0; position < gameData.owners.length; position += 1) paintTerritoryTile(position);
-      options.territoryContext.putImageData(territoryImageData, 0, 0);
-      compose();
+      throw new Error('Terrifront requires WebGL2 for map rendering');
     }
 
     function updateTerritory(changes) {
-      if (options.webglRenderer || !territoryImageData) return;
-      const affected = new Set();
-      options.changeBuffer.forEach(changes, (position) => {
-        affected.add(position);
-        for (const neighbor of options.getNeighbors(position)) affected.add(neighbor);
-      });
-      for (const position of affected) {
-        paintTerritoryTile(position);
-        markDirty(position);
+      if (!options.webglRenderer) {
+        throw new Error('Terrifront requires WebGL2 for map rendering');
       }
-      territoryLayerDirty = true;
+      options.webglSync.updateOwners(changes);
       options.renderState.sceneDirty = true;
     }
 
     function updateWasteland(changes) {
-      if (options.webglRenderer || !wastelandImageData) return;
-      const wasteland = options.getWasteland();
-      for (const change of changes || []) {
-        const position = typeof change === 'number' ? change : change.position;
-        if (position < 0 || position >= wasteland.length) continue;
-        if (wasteland[position]) paintWastelandTile(position);
-        else {
-          const pixel = position * 4;
-          wastelandImageData.data[pixel] = 0;
-          wastelandImageData.data[pixel + 1] = 0;
-          wastelandImageData.data[pixel + 2] = 0;
-          wastelandImageData.data[pixel + 3] = 0;
-        }
-        markDirty(position);
+      if (!options.webglRenderer) {
+        throw new Error('Terrifront requires WebGL2 for map rendering');
       }
-      if (changes?.length) {
-        wastelandLayerDirty = true;
-        options.renderState.sceneDirty = true;
-      }
+      options.webglSync.updateWasteland(changes);
+      options.renderState.sceneDirty = true;
     }
 
     function draw() {
@@ -183,36 +141,7 @@
         options.renderState.sceneDirty = false;
         return;
       }
-      const { width, height } = dimensions();
-      if (territoryLayerDirty || wastelandLayerDirty) {
-        if (dirtyMinX <= dirtyMaxX && dirtyMinY <= dirtyMaxY) {
-          const dirtyWidth = dirtyMaxX - dirtyMinX + 1;
-          const dirtyHeight = dirtyMaxY - dirtyMinY + 1;
-          const useFullBlit = dirtyWidth > width * 0.6 || dirtyHeight > height * 0.6;
-          if (useFullBlit) {
-            if (territoryLayerDirty) options.territoryContext.putImageData(territoryImageData, 0, 0);
-            if (wastelandLayerDirty) options.wastelandContext.putImageData(wastelandImageData, 0, 0);
-            compose();
-          } else {
-            if (territoryLayerDirty) options.territoryContext.putImageData(territoryImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-            if (wastelandLayerDirty) options.wastelandContext.putImageData(wastelandImageData, 0, 0, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-            options.sceneContext.clearRect(dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-            options.sceneContext.drawImage(options.terrainCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-            options.sceneContext.drawImage(options.wastelandCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-            options.sceneContext.drawImage(options.territoryCanvas, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight, dirtyMinX, dirtyMinY, dirtyWidth, dirtyHeight);
-          }
-        }
-        dirtyMinX = Infinity;
-        dirtyMinY = Infinity;
-        dirtyMaxX = -Infinity;
-        dirtyMaxY = -Infinity;
-        territoryLayerDirty = false;
-        wastelandLayerDirty = false;
-      }
-      if (!options.renderState.sceneDirty) return;
-      options.context.clearRect(0, 0, width, height);
-      options.context.drawImage(options.sceneCanvas, 0, 0, width, height);
-      options.renderState.sceneDirty = false;
+      throw new Error('Terrifront requires WebGL2 for map rendering');
     }
 
     return { buildTerrain, reset, rebuildTerritory, updateTerritory, updateWasteland, draw, compose };
