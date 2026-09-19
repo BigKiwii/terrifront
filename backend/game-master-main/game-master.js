@@ -88,7 +88,7 @@ class GameMaster {
       if (position === null) position = engine.spawnManager.randomPosition();
       if (position === null) continue;
       const selected = engine.selectSpawn(playerId, position);
-      if (selected.accepted) engine.players.get(playerId).capitalColor = '#8b9298';
+      if (selected.accepted) engine.players.get(playerId).capitalColor = engine.createPlayerColor(playerId);
     }
     return null;
   }

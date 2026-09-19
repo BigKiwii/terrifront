@@ -25,6 +25,33 @@ const {
   BOT_TROOP_INCOME_MULTIPLIER
 } = require('../../shared/game-rules');
 
+const PLAYER_COLORS = [
+  '#7ec48a', '#e8907a', '#85b4e0', '#d4bc6a',
+  '#c49ad4', '#e8a0bc', '#6ec4bc', '#e0aa72'
+];
+
+function pastelBotColor(playerNumber) {
+  let hue = (playerNumber * 137.508) % 360;
+  let color = '';
+  do {
+    const saturation = 0.58;
+    const lightness = 0.72;
+    const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+    const second = chroma * (1 - Math.abs((hue / 60) % 2 - 1));
+    const match = hue < 60 ? [chroma, second, 0]
+      : hue < 120 ? [second, chroma, 0]
+        : hue < 180 ? [0, chroma, second]
+          : hue < 240 ? [0, second, chroma]
+            : hue < 300 ? [second, 0, chroma]
+              : [chroma, 0, second];
+    const base = lightness - chroma / 2;
+    const channels = match.map((value) => Math.round((value + base) * 255));
+    color = `#${channels.map((value) => value.toString(16).padStart(2, '0')).join('')}`;
+    hue = (hue + 1) % 360;
+  } while (PLAYER_COLORS.includes(color));
+  return color;
+}
+
 class GameEngine {
   constructor(gameId, initialMap = null) {
     this.gameId = gameId;
@@ -158,13 +185,9 @@ class GameEngine {
   }
 
   createPlayerColor(playerId) {
-    if (this.players.get(playerId)?.isBot) return '#8b9298';
-    const palette = [
-      '#7ec48a', '#e8907a', '#85b4e0', '#d4bc6a',
-      '#c49ad4', '#e8a0bc', '#6ec4bc', '#e0aa72'
-    ];
     const playerNumber = Number(playerId.replace('player-', '')) || 1;
-    return palette[(playerNumber - 1) % palette.length];
+    if (this.players.get(playerId)?.isBot) return pastelBotColor(playerNumber);
+    return PLAYER_COLORS[(playerNumber - 1) % PLAYER_COLORS.length];
   }
 
   startTicker() {
