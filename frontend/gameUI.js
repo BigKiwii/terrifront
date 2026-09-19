@@ -99,6 +99,8 @@
   let lastPacketAt = 0;
   let displayTroops = 0;
   let targetTroops = 0;
+  let troopUpdateWatchdog = null;
+  let lastTroopUpdateAt = 0;
 
   let gameSessionId = 0;
 
@@ -152,6 +154,36 @@
     dynamicScheduler.stop();
     canvasResizer.stop();
     mapGestures.stop();
+  }
+
+  function stopTroopUpdateWatchdog() {
+    if (troopUpdateWatchdog !== null) clearTimeout(troopUpdateWatchdog);
+    troopUpdateWatchdog = null;
+  }
+
+  function scheduleTroopUpdateWatchdog() {
+    stopTroopUpdateWatchdog();
+    if (!activeGame) return;
+    troopUpdateWatchdog = setTimeout(() => {
+      const elapsedMs = performance.now() - lastTroopUpdateAt;
+      console.warn('[TerriFront] No troop value update received after active game start', {
+        elapsedMs: Math.round(elapsedMs),
+        playerId: localPlayerId
+      });
+      scheduleTroopUpdateWatchdog();
+    }, 5000);
+  }
+
+  function logTroopUpdate(player, tickCount, previousTroops) {
+    lastTroopUpdateAt = performance.now();
+    console.info('[TerriFront] Troop update received', {
+      tickCount,
+      playerId: player.playerId,
+      previousTroops,
+      troops: player.troops,
+      territorySize: player.territorySize
+    });
+    scheduleTroopUpdateWatchdog();
   }
 
   function applyMapTransform() {
@@ -1047,6 +1079,16 @@
         selectedPosition = player?.spawnPosition ?? null;
       }
       resetInterpolation();
+      lastTroopUpdateAt = performance.now();
+      console.info('[TerriFront] Active player snapshot received', {
+        tickCount: data.tickCount,
+        players: (data.players || []).map((player) => ({
+          playerId: player.playerId,
+          troops: player.troops,
+          territorySize: player.territorySize
+        }))
+      });
+      scheduleTroopUpdateWatchdog();
       leaderboardRenderer.render(gameData.players, localPlayerId, true);
       draw();
       startRenderLoop();
@@ -1072,6 +1114,7 @@
       if (hadBoats || boats.length) invalidateDynamic();
       renderLoop.queueChanges(changeBuffer.decode(data), packetIntervalMs);
       let leaderboardDirty = false;
+      const troopUpdates = [];
       if (!playerMap.size && gameData?.players?.length) rebuildPlayerMap();
       for (const player of data.players || []) {
         const current = playerMap.get(player.playerId);
@@ -1090,7 +1133,9 @@
           const ownerId = Number(player.playerId.replace('player-', ''));
           if (player.capitalColor) playerColors.set(ownerId, player.capitalColor);
           leaderboardDirty = true;
+          troopUpdates.push({ player, previousTroops: null });
         }
+        if (current && previous.troops !== player.troops) troopUpdates.push({ player, previousTroops: previous.troops });
         if (current && (
           previous.troops !== player.troops ||
           previous.territorySize !== player.territorySize ||
@@ -1101,6 +1146,14 @@
           leaderboardDirty = true;
         }
         if (player.playerId === localPlayerId) updateLocalTroops(current || player);
+      }
+      if (troopUpdates.length) {
+        troopUpdates.forEach(({ player, previousTroops }) => logTroopUpdate(player, data.tickCount, previousTroops));
+      } else if (data.players?.length) {
+        console.debug('[TerriFront] Player packet received without troop value changes', {
+          tickCount: data.tickCount,
+          players: data.players.map((player) => ({ playerId: player.playerId, troops: player.troops }))
+        });
       }
       // Keep the rendered collection tied to the registry. This also handles
       // update packets arriving before a complete player list is installed.
@@ -1138,6 +1191,7 @@
     },
     stop() {
       gameSessionId += 1;
+      stopTroopUpdateWatchdog();
       stopRenderLoop();
       spawnPhase = null;
       activeGame = false;
