@@ -43,6 +43,62 @@
     return buf;
   }
 
+  // Encode wasteland changes [{position, value}] as a flat transferable Int32Array.
+  function encodeWastelandList(changes) {
+    if (!changes || changes.length === 0) return null;
+    const buf = new Int32Array(changes.length * 2);
+    for (let i = 0; i < changes.length; i += 1) {
+      buf[i * 2]     = changes[i].position;
+      buf[i * 2 + 1] = changes[i].value != null ? changes[i].value : 1;
+    }
+    return buf;
+  }
+
+  // Encode players as a flat transferable Int32Array — avoids structured-clone
+  // of a large array of objects on every tick. String fields (name, color) are
+  // already held by the main thread from START_READY/ACTIVE_GAME; only numeric
+  // fields change tick-to-tick.
+  // Layout per player (8 ints, PLAYER_STRIDE):
+  //   [0] numericId  – integer suffix of "player-N"
+  //   [1] troops
+  //   [2] territorySize
+  //   [3] flags  – bit0=isBot, bit1=isAlive, bit2=isWinner, bit3=expansionActive
+  //   [4] spawnPosition (-1 if null)
+  //   [5..7] reserved 0
+  const PLAYER_STRIDE = 8;
+  function encodePlayersList(players) {
+    if (!players || players.length === 0) return null;
+    const buf = new Int32Array(players.length * PLAYER_STRIDE);
+    for (let i = 0; i < players.length; i += 1) {
+      const p = players[i];
+      const base = i * PLAYER_STRIDE;
+      buf[base]     = Number(String(p.playerId || '').replace('player-', '')) || 0;
+      buf[base + 1] = Math.round(p.troops || 0);
+      buf[base + 2] = p.territorySize || 0;
+      buf[base + 3] = (p.isBot ? 1 : 0) | (p.isAlive !== false ? 2 : 0) | (p.isWinner ? 4 : 0) | (p.expansionActive ? 8 : 0);
+      buf[base + 4] = Number.isInteger(p.spawnPosition) ? p.spawnPosition : -1;
+      // reserved
+      buf[base + 5] = 0;
+      buf[base + 6] = 0;
+      buf[base + 7] = 0;
+    }
+    return buf;
+  }
+
+  // Encode boats as a flat transferable Int32Array: [ownerId, position, troops] per boat.
+  const BOAT_STRIDE = 3;
+  function encodeBoatsList(boats) {
+    if (!boats || boats.length === 0) return null;
+    const buf = new Int32Array(boats.length * BOAT_STRIDE);
+    for (let i = 0; i < boats.length; i += 1) {
+      const b = boats[i];
+      buf[i * BOAT_STRIDE]     = b.ownerId || 0;
+      buf[i * BOAT_STRIDE + 1] = b.position || 0;
+      buf[i * BOAT_STRIDE + 2] = Math.round(b.troops || 0);
+    }
+    return buf;
+  }
+
   function clearTimers() {
     if (tickHandle !== null) clearInterval(tickHandle);
     if (spawnHandle !== null) clearTimeout(spawnHandle);
@@ -85,11 +141,17 @@
     if (!engine || engine.phase !== 'SPAWNING') return;
     const state = engine.finalizeSpawnPhase();
     if (!state) return;
-    const changesBuf = encodeChanges(state.owners);
-    state.changes = null;
-    state.owners = null; // don't transfer the full owners Int32Array — it's huge
-    // Transfer the changesBuf so the main thread gets it zero-copy.
-    self.postMessage({ type: 'ACTIVE_GAME', payload: state, changesBuf }, [changesBuf.buffer]);
+    const changesBuf   = encodeChanges(state.owners);
+    const playersBuf   = encodePlayersList(state.players);
+    const wastelandBuf = encodeWastelandList(state.wastelandChanges);
+    state.changes         = null;
+    state.owners          = null;
+    state.players         = null; // sent via playersBuf
+    state.wastelandChanges = null; // sent via wastelandBuf
+    const transferables = [changesBuf.buffer];
+    if (playersBuf)   transferables.push(playersBuf.buffer);
+    if (wastelandBuf) transferables.push(wastelandBuf.buffer);
+    self.postMessage({ type: 'ACTIVE_GAME', payload: state, changesBuf, playersBuf, wastelandBuf }, transferables);
     nextTickAt = Date.now() + TICK_MS;
     scheduleTick();
   }
@@ -100,11 +162,36 @@
       if (!engine) return;
       const update = engine.tick();
       if (update) {
-        // Encode tile changes as a transferable flat Int32Array.
-        const buf = encodeChangesList(update.changes);
-        update.changes = null;
-        if (buf) self.postMessage({ type: 'UPDATE', payload: update, changesBuf: buf }, [buf.buffer]);
-        else self.postMessage({ type: 'UPDATE', payload: update, changesBuf: null });
+        // Encode every per-tick array as a transferable flat typed buffer.
+        // This eliminates structured-clone cost for large object arrays (players,
+        // boats, wastelandChanges) which was the main source of lag on Railway's
+        // single-core containers during the early expansion burst.
+        const changesBuf    = encodeChangesList(update.changes);
+        const playersBuf    = encodePlayersList(update.players);
+        const wastelandBuf  = encodeWastelandList(update.wastelandChanges);
+        const boatsBuf      = encodeBoatsList(update.boats);
+
+        // Build a lean scalar-only payload — no object arrays at all.
+        const payload = {
+          gameId:    update.gameId,
+          tickCount: update.tickCount,
+          winnerId:  update.winnerId ?? null,
+          // activeAttacks omitted: offline mode has no server cancel path
+          // (TerriCommunicator.send is a no-op offline), so sending this
+          // 200-entry object array every tick is pure waste.
+        };
+
+        // Collect all non-null transferable buffers.
+        const transferables = [];
+        if (changesBuf)   transferables.push(changesBuf.buffer);
+        if (playersBuf)   transferables.push(playersBuf.buffer);
+        if (wastelandBuf) transferables.push(wastelandBuf.buffer);
+        if (boatsBuf)     transferables.push(boatsBuf.buffer);
+
+        self.postMessage(
+          { type: 'UPDATE', payload, changesBuf, playersBuf, wastelandBuf, boatsBuf },
+          transferables
+        );
       }
       nextTickAt += TICK_MS;
       const now = Date.now();

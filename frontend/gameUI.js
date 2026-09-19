@@ -226,6 +226,66 @@
     for (const change of changes || []) callback(change.position, change.owner);
   }
 
+  // Decode a playersBuf (flat Int32Array, 8 ints per player) back into the
+  // player-object shape expected by the rest of applyGameUpdate / startActiveGame.
+  // Only the numeric fields are encoded; string fields (playerName, capitalColor,
+  // playerId) are already in playerMap from the initial ACTIVE_GAME message and
+  // must be merged from there, not reconstructed from scratch.
+  const OFFLINE_PLAYER_STRIDE = 8;
+  function decodePlayersBuf(buf) {
+    if (!buf) return null;
+    const raw = buf instanceof Int32Array ? buf : new Int32Array(buf);
+    const count = Math.floor(raw.length / OFFLINE_PLAYER_STRIDE);
+    const result = [];
+    for (let i = 0; i < count; i += 1) {
+      const base   = i * OFFLINE_PLAYER_STRIDE;
+      const numId  = raw[base];
+      const flags  = raw[base + 3];
+      // Re-use the existing player object from playerMap when available so that
+      // string fields (playerName, capitalColor) are preserved without re-sending.
+      const playerId = `player-${numId}`;
+      const existing = playerMap.get(playerId);
+      result.push({
+        playerId,
+        playerName:      existing?.playerName      ?? playerId,
+        capitalColor:    existing?.capitalColor     ?? null,
+        troops:          raw[base + 1],
+        territorySize:   raw[base + 2],
+        isBot:           Boolean(flags & 1),
+        isAlive:         Boolean(flags & 2),
+        isWinner:        Boolean(flags & 4),
+        expansionActive: Boolean(flags & 8),
+        spawnPosition:   raw[base + 4] === -1 ? null : raw[base + 4],
+      });
+    }
+    return result;
+  }
+
+  // Decode wastelandBuf (flat Int32Array: [position, value, ...]) into the
+  // [{position, value}] shape expected by applyWastelandChanges.
+  function decodeWastelandBuf(buf) {
+    if (!buf) return null;
+    const raw = buf instanceof Int32Array ? buf : new Int32Array(buf);
+    const result = [];
+    for (let i = 0; i + 1 < raw.length; i += 2) result.push({ position: raw[i], value: raw[i + 1] });
+    return result;
+  }
+
+  // Decode boatsBuf (flat Int32Array: [ownerId, position, troops, ...]) into the
+  // [{ownerId, position, troops}] shape expected by boats.splice / drawBoats.
+  const OFFLINE_BOAT_STRIDE = 3;
+  function decodeBoatsBuf(buf) {
+    if (!buf) return null;
+    const raw = buf instanceof Int32Array ? buf : new Int32Array(buf);
+    const count = Math.floor(raw.length / OFFLINE_BOAT_STRIDE);
+    const result = [];
+    for (let i = 0; i < count; i += 1) {
+      const base = i * OFFLINE_BOAT_STRIDE;
+      result.push({ ownerId: raw[base], position: raw[base + 1], troops: raw[base + 2] });
+    }
+    return result;
+  }
+
   function queueChanges(changes) {
     if (!changes?.length) return;
     const incoming = changes instanceof Int32Array ? changes : decodeChangesBuf({ changes });
@@ -1973,6 +2033,10 @@
       drawDynamic();
     },
     startActiveGame(data) {
+      // Decode typed-array buffers from the offline worker's ACTIVE_GAME message.
+      if (data.playersBuf)   data.players           = decodePlayersBuf(data.playersBuf)   || data.players;
+      if (data.wastelandBuf) data.wastelandChanges   = decodeWastelandBuf(data.wastelandBuf);
+
       spawnPhase = null;
       activeGame = true;
       localPlayerEliminated = false;
@@ -2014,6 +2078,14 @@
       boatActionHandler = handler;
     },
     applyGameUpdate(data) {
+      // Decode typed-array buffers sent by the offline worker (zero-copy path).
+      // These replace the corresponding object-array fields in `data` so the
+      // rest of the function stays unchanged regardless of whether the update
+      // came from the offline worker or the multiplayer server.
+      if (data.playersBuf)   data.players          = decodePlayersBuf(data.playersBuf)   || data.players;
+      if (data.wastelandBuf) data.wastelandChanges  = decodeWastelandBuf(data.wastelandBuf);
+      if (data.boatsBuf)     data.boats             = decodeBoatsBuf(data.boatsBuf);
+
       const localPlayerBeforeAlive = (gameData?.players || []).find((player) => player.playerId === localPlayerId)?.isAlive !== false;
       const now = performance.now();
       if (lastPacketAt) {
