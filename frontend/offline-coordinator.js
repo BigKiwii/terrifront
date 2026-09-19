@@ -13,6 +13,16 @@
   const PLAYER_STRIDE = 8;
   let playerMetadata = new Map();
 
+  function decodeWasteland(buffer) {
+    if (!buffer) return [];
+    const values = buffer instanceof Int32Array ? buffer : new Int32Array(buffer);
+    const changes = [];
+    for (let offset = 0; offset < values.length; offset += 2) {
+      changes.push({ position: values[offset], value: values[offset + 1] });
+    }
+    return changes;
+  }
+
   function decodePlayers(buffer) {
     if (!buffer) return [];
     const values = buffer instanceof Int32Array ? buffer : new Int32Array(buffer);
@@ -98,6 +108,7 @@
         TerriGameUI.startActiveGame({
           ...message.payload,
           players: activePlayers.length ? activePlayers : [...playerMetadata.values()],
+          wastelandChanges: decodeWasteland(message.wastelandBuf),
           changesBuf: message.changesBuf
         });
         }
@@ -106,6 +117,7 @@
         TerriGameUI.applyGameUpdate({
           ...message.payload,
           players: decodePlayers(message.playersBuf) || [],
+          wastelandChanges: decodeWasteland(message.wastelandBuf),
           changesBuf: message.changesBuf
         });
         break;

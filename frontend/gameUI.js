@@ -37,6 +37,8 @@
   const nukeLaunch = document.querySelector('#nuke-launch');
   const nukeCancel = document.querySelector('#nuke-cancel');
   const nukeStatus = document.querySelector('#nuke-status');
+  const nukeInboundBanner = document.querySelector('#nuke-inbound-banner');
+  const nukeVignette = document.querySelector('#nuke-vignette');
   const context = canvas.getContext('2d');
   let webglRenderer = null;
   try {
@@ -95,6 +97,7 @@
   let nukeTarget = null;
   let nukeFlight = null;
   let nukeShake = null;
+  let nukeInbound = false;
   const TROOP_SMOOTHING_MS = 90;
   let packetIntervalMs = 100;
   let lastPacketAt = 0;
@@ -115,6 +118,44 @@
     webglSync.updateWasteland(changes);
     sceneRenderer.updateWasteland(changes);
     renderState.sceneDirty = true;
+  }
+
+  const NUKE_RADIUS = 30;
+  const nukeCircleOffsets = [];
+  for (let offsetY = -NUKE_RADIUS; offsetY <= NUKE_RADIUS; offsetY += 1) {
+    const width = Math.round(Math.sqrt(NUKE_RADIUS ** 2 - offsetY ** 2));
+    nukeCircleOffsets.push({ offsetY, minX: -width, maxX: width });
+  }
+
+  function isNukeTargetingLocalPlayer(targetPosition) {
+    if (!gameData?.owners || !localPlayerId) return false;
+    const width = gameData.map.width;
+    const height = gameData.map.height;
+    const ownerId = Number(localPlayerId.replace('player-', ''));
+    const centerX = targetPosition % width;
+    const centerY = Math.floor(targetPosition / width);
+    for (const row of nukeCircleOffsets) {
+      const y = centerY + row.offsetY;
+      if (y < 0 || y >= height) continue;
+      const minX = Math.max(0, centerX + row.minX);
+      const maxX = Math.min(width - 1, centerX + row.maxX);
+      for (let x = minX; x <= maxX; x += 1) {
+        if (gameData.owners[y * width + x] === ownerId) return true;
+      }
+    }
+    return false;
+  }
+
+  function showNukeInbound() {
+    nukeInbound = true;
+    if (nukeInboundBanner) nukeInboundBanner.hidden = false;
+    if (nukeVignette) nukeVignette.hidden = false;
+  }
+
+  function clearNukeInbound() {
+    nukeInbound = false;
+    if (nukeInboundBanner) nukeInboundBanner.hidden = true;
+    if (nukeVignette) nukeVignette.hidden = true;
   }
 
   function updatePowerSlider() {
@@ -353,6 +394,7 @@
       startedAt: performance.now(),
       durationMs: Math.max(3750, Number(data.durationMs) || 3750)
     };
+    if (isNukeTargetingLocalPlayer(target)) showNukeInbound();
     invalidateDynamic();
   }
 
@@ -497,6 +539,7 @@
     getNukeFlight: () => nukeFlight,
     clearNukeFlight: () => { nukeFlight = null; },
     onNukeImpact: () => {
+      clearNukeInbound();
       nukeShake = { startedAt: performance.now(), durationMs: 600, strength: 5 };
       nukeLaunch.disabled = true;
       nukeSelectTarget.disabled = false;
@@ -907,6 +950,7 @@
     },
     onCancel: () => {
       nukeFlight = null;
+      clearNukeInbound();
       dynamicRenderer.resetNukeEffects();
       setNukeMode(false);
     }
@@ -928,6 +972,7 @@
       gameData = data;
       nukeFlight = null;
       nukeShake = null;
+      clearNukeInbound();
       dynamicRenderer.resetNukeEffects();
       setNukeMode(false);
       territoryVersion = 0;
@@ -1226,6 +1271,7 @@
       activeGame = false;
       nukeFlight = null;
       nukeShake = null;
+      clearNukeInbound();
       dynamicRenderer.resetNukeEffects();
       setNukeMode(false);
       updateActiveAttacks([]);
