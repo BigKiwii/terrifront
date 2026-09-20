@@ -37,7 +37,7 @@ function cloneMap(source) {
 function createMap(sourceTerrain, width, height, sourceExpansionTimes, sourceTopology = null) {
   const cellCount = width * height;
   const topology = sourceTopology || createTopology(sourceTerrain, width, height, sourceExpansionTimes);
-  const owners = new Int32Array(cellCount);
+  const owners = new Uint16Array(cellCount);
 
   return {
     mapId: MAP_ID,

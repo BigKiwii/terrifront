@@ -183,6 +183,7 @@ h1 span { color: var(--home-green); }
 
 .game-screen { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; background: #354f63; }
 .game-screen[hidden] { display: none; }
+.game-screen::after { position: absolute; z-index: 4; inset: 72% 0 0; pointer-events: none; content: ''; background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.16) 35%, rgba(0, 0, 0, 0.67) 100%); }
 .develop-note { width: min(520px, 90vw); margin: 18px auto 0; border: 3px solid #d7e9ff; padding: 12px 16px; color: #ffffff; background: #2774b8; box-shadow: 5px 5px 0 rgba(48, 75, 92, 0.42); font-family: var(--data-font); font-size: 10px; font-weight: 700; line-height: 1.45; letter-spacing: 0.04em; text-align: center; }
 .quit-button { position: absolute; z-index: 8; top: 14px; right: 14px; border: 1px solid rgba(244, 243, 234, 0.55); padding: 6px 9px; color: var(--muted); background: rgba(7, 18, 33, 0.88); font-family: var(--data-font); font-size: 9px; letter-spacing: 0.1em; cursor: pointer; }
 .quit-button:hover { color: var(--paper); border-color: var(--paper); background: rgba(40, 25, 34, 0.94); }
@@ -215,7 +216,7 @@ h1 span { color: var(--home-green); }
 .leaderboard { position: absolute; top: 14px; left: 14px; z-index: 6; width: 230px; border: 2px solid #d2a77d; color: #68453c; background: rgba(248, 231, 207, 0.96); box-shadow: 3px 3px 0 rgba(78, 47, 40, 0.3); font-family: var(--data-font); font-size: 11px; }
 .leaderboard[hidden] { display: none; }
 .leaderboard-title { padding: 8px 12px; color: #8c5a46; border-bottom: 1px solid #d2a77d; font-size: 12px; font-weight: 800; letter-spacing: 0.14em; }
-.leaderboard-list { max-height: 360px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: #d2a77d #f3d9c0; scrollbar-width: thin; }
+.leaderboard-list { max-height: 320px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: #d2a77d #f3d9c0; scrollbar-width: thin; }
 .leaderboard-row { display: flex; height: 32px; align-items: center; gap: 10px; padding: 5px 12px; border-bottom: 1px solid rgba(210, 167, 125, 0.35); }
 .leaderboard-row { cursor: pointer; }
 .leaderboard-row:hover, .leaderboard-row:focus-visible { outline: 1px solid #c47a60; outline-offset: -1px; background: #f3d9c0; }

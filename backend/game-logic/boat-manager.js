@@ -340,7 +340,7 @@ class BoatManager {
       releasedPositions = this.territory.releaseOwner(defenderId);
       this.expansionManager.cancelEliminatedPlayer(defenderId);
     }
-    this.map.owners[landing] = ownerId;
+    this.territory.setOwner(landing, ownerId);
     this.territory.registerOwner(ownerId, [landing]);
     this.territory.notifyChange(landing, ownerId, defenderId);
 

@@ -17,6 +17,7 @@ function createLandMap(width = 50, height = 50) {
 test('map clones share immutable topology but isolate ownership', () => {
   const source = createLandMap(20, 20);
   const clone = cloneMap(source);
+  assert.ok(source.owners instanceof Uint16Array);
   assert.notEqual(clone.owners, source.owners);
   assert.equal(clone.topology, source.topology);
   assert.equal(clone.terrain, source.terrain);
@@ -24,6 +25,16 @@ test('map clones share immutable topology but isolate ownership', () => {
   assert.equal(clone.getNeighbors(21), source.getNeighbors(21));
   clone.owners[21] = 7;
   assert.equal(source.owners[21], 0);
+});
+
+test('territory manager shares and validates the typed ownership buffer', () => {
+  const map = createLandMap(10, 10);
+  const territory = new TerritoryManager(map);
+
+  assert.equal(territory.owners, map.owners);
+  territory.setOwner(11, 7);
+  assert.equal(map.owners[11], 7);
+  assert.throws(() => territory.setOwner(11, 65536), RangeError);
 });
 
 test('nuke impact is a clipped land-only circle', () => {

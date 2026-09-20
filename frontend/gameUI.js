@@ -712,6 +712,22 @@
     }
   });
 
+  gameScreen.addEventListener('contextmenu', (event) => {
+    event.preventDefault();
+  });
+
+  mapFrame.addEventListener('contextmenu', (event) => {
+    if (!activeGame || localPlayerId === null || !terrain) return;
+    const position = mapCoordinates.fromPointer(event);
+    const ownerId = Number(localPlayerId.replace('player-', ''));
+    if (position === null || (terrain[position] & 0x80) === 0 || gameData.owners[position] === ownerId) {
+      hideMapMenu();
+      return;
+    }
+    const canLaunchBoat = mapRules.targetNearWater(position) && mapRules.playerHasWaterBorder(ownerId);
+    mapMenuController.show(event, position, canLaunchBoat);
+  });
+
   function randomColor() {
     const colors = ['#69c878', '#e86b52', '#6ba8e8', '#d9b84c', '#bb75d4', '#e889b1'];
     return colors[Math.floor(Math.random() * colors.length)];

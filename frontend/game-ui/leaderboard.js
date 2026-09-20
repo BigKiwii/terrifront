@@ -22,7 +22,16 @@
         .sort((a, b) =>
           (b.territorySize || 0) - (a.territorySize || 0) || (b.troops || 0) - (a.troops || 0));
       const rankedEntries = ranked.map((player, index) => ({ player, index }));
-      const displayEntries = rankedEntries;
+      const localEntry = rankedEntries.find(({ player }) => player.playerId === localPlayerId);
+      const topEntries = rankedEntries.slice(0, 9);
+      const topPlayerIds = new Set(topEntries.map(({ player }) => player.playerId));
+      const displayEntries = localEntry && !topEntries.some(({ player }) => player.playerId === localPlayerId)
+        ? [
+          ...topEntries,
+          localEntry,
+          ...rankedEntries.filter(({ player }) => player.playerId !== localPlayerId && !topPlayerIds.has(player.playerId))
+        ]
+        : rankedEntries;
 
       if (!list) {
         leaderboard.innerHTML = '<div class="leaderboard-title">LEADERBOARD</div><div class="leaderboard-list"></div>';

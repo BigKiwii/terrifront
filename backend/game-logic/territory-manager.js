@@ -1,6 +1,7 @@
 class TerritoryManager {
   constructor(map) {
     this.map = map;
+    this.owners = map.owners;
     this.borderTiles = new Map();
     this.ownedCells = new Map();
     this.territorySizes = new Map();
@@ -18,8 +19,15 @@ class TerritoryManager {
     this.changeHandler?.({ position, ownerId, previousOwnerId });
   }
 
+  setOwner(position, ownerId) {
+    if (!Number.isInteger(ownerId) || ownerId < 0 || ownerId > 0xffff) {
+      throw new RangeError(`Owner ID must be an integer between 0 and 65535: ${ownerId}`);
+    }
+    this.owners[position] = ownerId;
+  }
+
   getOwner(position) {
-    return this.map.owners[position] ?? 0;
+    return this.owners[position] ?? 0;
   }
 
   isOwnedBy(position, ownerId) {
@@ -77,7 +85,7 @@ class TerritoryManager {
     const borders = this.getBorderSet(ownerId);
     const owned = this.ownedCells.get(ownerId);
     for (const position of cells) {
-      this.map.owners[position] = 0;
+      this.setOwner(position, 0);
       owned?.delete(position);
       const neighbors = this.map.getNeighbors(position);
       this.updateTileGrade(position);
@@ -98,14 +106,14 @@ class TerritoryManager {
     const destroyedByOwner = new Map();
     const destroyedChanges = [];
     for (const position of cells) {
-      const ownerId = this.map.owners[position];
+      const ownerId = this.getOwner(position);
       affectedPositions.add(position);
       for (const neighbor of this.map.getNeighbors(position)) affectedPositions.add(neighbor);
       if (!ownerId) continue;
       affectedOwners.add(ownerId);
       destroyedChanges.push({ position, previousOwnerId: ownerId });
       destroyedByOwner.set(ownerId, (destroyedByOwner.get(ownerId) || 0) + 1);
-      this.map.owners[position] = 0;
+      this.setOwner(position, 0);
       this.ownedCells.get(ownerId)?.delete(position);
     }
 
@@ -120,7 +128,7 @@ class TerritoryManager {
 
     for (const position of affectedPositions) this.updateTileGrade(position);
     for (const position of affectedPositions) {
-      const ownerId = this.map.owners[position];
+      const ownerId = this.getOwner(position);
       if (ownerId) affectedOwners.add(ownerId);
     }
     for (const ownerId of affectedOwners) {
@@ -159,13 +167,13 @@ class TerritoryManager {
 
   attackTile(position, attackerId, attackerTroops, players) {
     if (!this.map.isLand(position)) return { success: false };
-    if (this.map.owners[position] === attackerId) return { success: false };
+    if (this.getOwner(position) === attackerId) return { success: false };
     const neighbors = this.map.getNeighbors(position);
-    if (!neighbors.some((neighbor) => this.map.owners[neighbor] === attackerId)) {
+    if (!neighbors.some((neighbor) => this.getOwner(neighbor) === attackerId)) {
       return { success: false, attackerLoss: 0 };
     }
 
-    const defenderId = this.map.owners[position];
+    const defenderId = this.getOwner(position);
     const defender = defenderId ? players.get(`player-${defenderId}`) : null;
     let attackerLoss = this.map.expansionTimes?.[position]
       ? this.map.expansionTimes[position] / 50
@@ -193,7 +201,7 @@ class TerritoryManager {
     }
     const wastelandCleared = Boolean(this.map.wasteland?.[position]);
     if (wastelandCleared) this.map.wasteland[position] = 0;
-    this.map.owners[position] = attackerId;
+    this.setOwner(position, attackerId);
     this.ownedCells.get(defenderId)?.delete(position);
     if (!this.ownedCells.has(attackerId)) this.ownedCells.set(attackerId, new Set());
     this.ownedCells.get(attackerId).add(position);
@@ -233,7 +241,7 @@ class TerritoryManager {
     const releasedPositions = [];
     const owned = this.ownedCells.get(ownerId) || new Set();
     for (const position of owned) {
-      this.map.owners[position] = 0;
+      this.setOwner(position, 0);
       releasedPositions.push(position);
     }
     for (const position of releasedPositions) {
@@ -250,7 +258,7 @@ class TerritoryManager {
 
   updateTileGrade(position) {
     this.tileGrades[position] = this.map.getNeighbors(position)
-      .filter((neighbor) => this.map.owners[neighbor] === this.map.owners[position]).length;
+      .filter((neighbor) => this.getOwner(neighbor) === this.getOwner(position)).length;
   }
 
   getTerritorySize(ownerId) {

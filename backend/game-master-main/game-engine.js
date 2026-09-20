@@ -173,7 +173,7 @@ class GameEngine {
 
   commitSpawn(player, cells = player.spawnCells) {
     const ownerId = Number(player.playerId.replace('player-', ''));
-    cells.forEach((cell) => { this.map.owners[cell] = ownerId; });
+    cells.forEach((cell) => { this.territoryManager.setOwner(cell, ownerId); });
     this.territoryManager.registerOwner(ownerId, cells);
     player.troops = Math.min(1000, this.getMaxTroops(player));
     player.cachedMaxTroops = player.troops;
