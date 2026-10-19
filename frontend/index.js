@@ -8,6 +8,14 @@
   const gameScreen = document.querySelector('#game-screen');
   const quitButton = document.querySelector('#quit-button');
   const powerSlider = document.querySelector('#power-slider');
+  const clickSound = new Audio('../Assets/click-sound.mp3');
+  clickSound.preload = 'auto';
+
+  document.addEventListener('click', function (event) {
+    if (!event.target.closest('button')) return;
+    clickSound.currentTime = 0;
+    clickSound.play().catch(() => {});
+  });
 
   const namePool = ['River Fox', 'Iron Finch', 'Neon Atlas', 'Moss Runner'];
 

@@ -80,6 +80,7 @@
       lastFrameAt = timestamp;
       drainPendingChanges(deltaMs);
       options.smoothTroops(deltaMs);
+      options.drawClouds(deltaMs);
       if (options.hasNukeEffect?.()) options.renderState.dynamicDirty = true;
       if (options.getNukeShake?.()) options.applyMapTransform();
       if (options.renderState.sceneDirty) options.drawScene();

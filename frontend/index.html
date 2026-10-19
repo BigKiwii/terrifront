@@ -7,8 +7,8 @@
   <title>TerriFront (BETA)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Jersey+15&family=New+Rocker&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/png" href="../Assets/logo_two.png">
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=New+Rocker&family=Pixelify+Sans:wght@400..700&display=swap" rel="stylesheet">
+  <link rel="icon" type="image/png" href="../Assets/New-logo.png">
   <link rel="stylesheet" href="index.css">
 </head>
 <body>
@@ -16,29 +16,28 @@
     <div class="logo-wash" aria-hidden="true"></div>
     <div class="logo-tint" aria-hidden="true"></div>
 
-    <section class="hero" aria-labelledby="game-title">
-      <p class="home-kicker">TACTICAL MAP // LIVE FRONT</p>
+    <section class="home-center" aria-labelledby="game-title">
       <div class="title-lockup">
-        <img class="title-logo" src="../Assets/logo_two.png" alt="">
+        <img class="title-logo" src="../Assets/New-logo.png" alt="">
         <h1 id="game-title">TERRI<span>FRONT</span></h1>
-        <img class="title-logo" src="../Assets/logo_two.png" alt="">
+        <img class="title-logo" src="../Assets/New-logo.png" alt="">
       </div>
-      <div class="beta-badge" role="note">THIS GAME IS IN BETA TESTING // BETA BUILD 0.0.1</div>
-
-      <form class="launch-panel" id="launch-form">
-        <div class="name-row">
-          <label class="sr-only" for="player-name">Player name</label>
-          <input id="player-name" name="playerName" type="text" maxlength="24" autocomplete="nickname" spellcheck="false" required>
-        </div>
-        <button class="play-button" type="submit">
-          <span>SINGLEPLAYER</span>
-        </button>
-        <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
-      </form>
-      <a class="discord-link" href="https://discord.gg/c8HXqYYP3B" target="_blank" rel="noopener noreferrer">
-        <img src="../Assets/discord-icon.png" alt="Join the Terrifront Discord">
-        <span>JOIN THE DISCORD</span>
-      </a>
+      <div class="hero">
+        <form class="launch-panel" id="launch-form">
+          <div class="name-row">
+            <label class="sr-only" for="player-name">Player name</label>
+            <input id="player-name" name="playerName" type="text" maxlength="24" autocomplete="nickname" spellcheck="false" required>
+          </div>
+          <button class="play-button" type="submit">
+            <span>SINGLEPLAYER</span>
+          </button>
+          <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
+        </form>
+        <a class="discord-link" href="https://discord.gg/c8HXqYYP3B" target="_blank" rel="noopener noreferrer">
+          <img src="../Assets/discord-icon.png" alt="Join the Terrifront Discord">
+          <span>JOIN THE DISCORD</span>
+        </a>
+      </div>
     </section>
     <aside class="develop-note" role="note">DEVELOPMENT NOTE: NUKES ARE FREE DURING BETA TESTING. NUCLEAR COSTS WILL BE ADDED IN A FUTURE BUILD. HAVE FUN LAUNCHING THEM.</aside>
   </main>
@@ -63,17 +62,19 @@
     <div class="active-attacks" id="active-attacks" aria-live="polite"></div>
     <div class="selector-stats" id="selector-stats" hidden>
       <div class="selector-troops">
-        <span class="selector-troops-icon">⚔</span>
-        <span id="selector-troop-count">0</span>
+        <div class="selector-tab">
+          <span class="selector-troops-icon"><img src="../Assets/troop-icon.png" alt=""></span>
+          <span id="selector-troop-count">0</span>
+        </div>
+        <div class="selector-meta">
+          <span>▦ <b id="selector-territory">0</b></span>
+          <span>⬡ <b id="selector-density">0.00</b></span>
+        </div>
         <div class="selector-actions" aria-label="Command actions">
           <button class="selector-action nuke-trigger" id="nuke-trigger" type="button" aria-label="Launch a nuke" title="Launch a nuke">
             <img src="../Assets/nuke_icon.png" alt="">
           </button>
         </div>
-      </div>
-      <div class="selector-meta">
-        <span>▦ <b id="selector-territory">0</b></span>
-        <span>⬡ <b id="selector-density">0.00</b></span>
       </div>
       <div class="nuke-controls" id="nuke-controls" hidden>
         <span class="nuke-status" id="nuke-status">SELECT A TARGET</span>
@@ -83,12 +84,13 @@
       </div>
     </div>
     <div class="attack-ratio-panel" id="attack-ratio-panel" hidden>
-      <button class="ratio-btn ratio-btn-minus" id="ratio-minus" aria-label="Decrease">-</button>
-      <div class="ratio-bar-track" id="ratio-track">
+      <button class="ratio-btn ratio-btn-minus" id="ratio-minus" type="button" aria-label="Decrease">&minus;</button>
+      <div class="ratio-bar-track" id="ratio-track" role="slider" tabindex="0" aria-label="Attack ratio" aria-valuemin="1" aria-valuemax="100" aria-valuenow="50">
         <div class="ratio-bar-fill" id="ratio-bar-fill"></div>
+        <div class="ratio-handle" id="ratio-handle"></div>
         <span class="ratio-bar-label" id="ratio-bar-label">0 troops (50%)</span>
       </div>
-      <button class="ratio-btn ratio-btn-plus" id="ratio-plus" aria-label="Increase">+</button>
+      <button class="ratio-btn ratio-btn-plus" id="ratio-plus" type="button" aria-label="Increase">+</button>
       <input id="power-slider" class="power-slider-hidden" type="range" min="1" max="100" value="50" step="1" aria-label="Attack ratio">
     </div>
     <div class="leaderboard" id="leaderboard" hidden aria-label="Player leaderboard"></div>
@@ -100,6 +102,7 @@
     <div class="map-frame">
       <canvas id="webgl-canvas" aria-label="Terrifront GPU map"></canvas>
       <canvas id="game-canvas" aria-label="Terrifront game map"></canvas>
+      <canvas id="cloud-canvas" aria-hidden="true"></canvas>
       <canvas id="dynamic-canvas" aria-hidden="true"></canvas>
     </div>
   </main>
@@ -110,6 +113,7 @@
   <script src="game-ui/color-utils.js"></script>
   <script src="game-ui/game-store.js"></script>
   <script src="game-ui/render-loop.js"></script>
+  <script src="game-ui/cloud-layer.js"></script>
   <script src="game-ui/map-assets.js"></script>
   <script src="game-ui/leaderboard.js"></script>
   <script src="game-ui/active-attacks.js"></script>

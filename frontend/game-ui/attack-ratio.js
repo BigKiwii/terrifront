@@ -49,6 +49,12 @@
       persist();
     });
 
+    track?.addEventListener('keydown', (event) => {
+      const step = event.shiftKey ? 10 : 1;
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') { event.preventDefault(); setValue(Number(slider.value) - step); }
+      if (event.key === 'ArrowRight' || event.key === 'ArrowUp') { event.preventDefault(); setValue(Number(slider.value) + step); }
+    });
+
     minus?.addEventListener('click', () => setValue(Number(slider.value) - 5));
     plus?.addEventListener('click', () => setValue(Number(slider.value) + 5));
     window.addEventListener('keydown', (event) => {

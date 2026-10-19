@@ -34,8 +34,14 @@
         : rankedEntries;
 
       if (!list) {
-        leaderboard.innerHTML = '<div class="leaderboard-title">LEADERBOARD</div><div class="leaderboard-list"></div>';
+        leaderboard.innerHTML = '<div class="leaderboard-title"><span class="leaderboard-trophy" aria-hidden="true">&#127942;</span><span class="leaderboard-heading">LEADERBOARD</span><button class="leaderboard-toggle" type="button" aria-label="Collapse leaderboard" aria-expanded="true"></button></div><div class="leaderboard-columns" aria-hidden="true"><span>#</span><span>PLAYER</span><span>LAND</span></div><div class="leaderboard-list"></div>';
         list = leaderboard.querySelector('.leaderboard-list');
+        const toggle = leaderboard.querySelector('.leaderboard-toggle');
+        toggle.addEventListener('click', () => {
+          const collapsed = leaderboard.classList.toggle('is-collapsed');
+          toggle.setAttribute('aria-expanded', String(!collapsed));
+          toggle.setAttribute('aria-label', collapsed ? 'Expand leaderboard' : 'Collapse leaderboard');
+        });
       }
 
       const existingRows = list.children;

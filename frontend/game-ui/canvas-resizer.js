@@ -16,10 +16,14 @@
       options.canvas.style.height = `${options.mapFrame.clientHeight}px`;
       options.webglCanvas.style.width = `${options.mapFrame.clientWidth}px`;
       options.webglCanvas.style.height = `${options.mapFrame.clientHeight}px`;
+      options.cloudCanvas.style.width = `${options.mapFrame.clientWidth}px`;
+      options.cloudCanvas.style.height = `${options.mapFrame.clientHeight}px`;
       options.dynamicCanvas.style.width = `${options.canvas.offsetWidth}px`;
       options.dynamicCanvas.style.height = `${options.canvas.offsetHeight}px`;
       options.canvas.width = Math.ceil(dimensions.width * mapScale);
       options.canvas.height = Math.ceil(dimensions.height * mapScale);
+      options.cloudCanvas.width = options.canvas.width;
+      options.cloudCanvas.height = options.canvas.height;
       options.dynamicCanvas.width = Math.ceil(dimensions.width * mapScale);
       options.dynamicCanvas.height = Math.ceil(dimensions.height * mapScale);
       if (options.webglRenderer) {
@@ -29,8 +33,10 @@
       }
       options.context.setTransform(mapScale, 0, 0, mapScale, 0, 0);
       options.dynamicContext.setTransform(mapScale, 0, 0, mapScale, 0, 0);
+      options.cloudContext.setTransform(mapScale, 0, 0, mapScale, 0, 0);
       options.context.imageSmoothingEnabled = false;
       options.dynamicContext.imageSmoothingEnabled = false;
+      options.cloudContext.imageSmoothingEnabled = false;
       if (options.hasTerrain()) {
         options.buildTerrainLayer();
         options.composeSceneLayer();

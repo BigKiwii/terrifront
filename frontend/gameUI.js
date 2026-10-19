@@ -18,6 +18,7 @@
 
   const canvas = document.querySelector('#game-canvas');
   const webglCanvas = document.querySelector('#webgl-canvas');
+  const cloudCanvas = document.querySelector('#cloud-canvas');
   const dynamicCanvas = document.querySelector('#dynamic-canvas');
   const mapFrame = document.querySelector('.map-frame');
   const gameScreen = document.querySelector('#game-screen');
@@ -40,6 +41,7 @@
   const nukeInboundBanner = document.querySelector('#nuke-inbound-banner');
   const nukeVignette = document.querySelector('#nuke-vignette');
   const context = canvas.getContext('2d');
+  const cloudContext = cloudCanvas.getContext('2d');
   let webglRenderer = null;
   try {
     webglRenderer = modules.webglRenderer?.createMapRenderer(webglCanvas);
@@ -418,6 +420,14 @@
     dynamicRenderer.draw();
   }
 
+  const cloudLayer = modules.cloudLayer.createCloudLayer({
+    context: cloudContext,
+    getMapDimensions: () => ({
+      width: gameData?.map.width || 876,
+      height: gameData?.map.height || 694
+    })
+  });
+
   function scheduleDynamicDraw() {
     dynamicScheduler.schedule();
   }
@@ -565,6 +575,7 @@
       renderState.labelsDirty = true;
     },
     smoothTroops,
+    drawClouds: cloudLayer.draw,
     drawScene,
     drawDynamic,
     drawLabels,
@@ -635,8 +646,10 @@
     gameScreen,
     canvas,
     webglCanvas,
+    cloudCanvas,
     dynamicCanvas,
     context,
+    cloudContext,
     dynamicContext,
     webglRenderer,
     getMapDimensions: () => ({

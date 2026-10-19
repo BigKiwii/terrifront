@@ -29,7 +29,14 @@ function resolveFile(requestPath) {
 }
 
 const server = http.createServer((request, response) => {
-  const requestPath = new URL(request.url, `http://${request.headers.host || 'localhost'}`).pathname;
+  let requestPath;
+  try {
+    requestPath = decodeURIComponent(new URL(request.url, `http://${request.headers.host || 'localhost'}`).pathname);
+  } catch {
+    response.writeHead(404, { 'Cache-Control': 'no-store' });
+    response.end('Not found');
+    return;
+  }
   const filePath = resolveFile(requestPath);
   if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     response.writeHead(404, { 'Cache-Control': 'no-store' });
