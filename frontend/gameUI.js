@@ -590,6 +590,10 @@
   const activeAttacksRenderer = modules.activeAttacks.createActiveAttacksRenderer(
     activeAttacksPanel,
     (playerId, attackId) => {
+      if (window.TerriOfflineGame?.isRunning()) {
+        window.TerriOfflineGame.cancelAttack(playerId, attackId);
+        return;
+      }
       window.TerriCommunicator?.send(window.TerriBinaryProtocol.encodeCancelExpansion(playerId, attackId));
     }
   );

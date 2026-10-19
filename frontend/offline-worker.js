@@ -313,6 +313,8 @@
       } else if (message.type === 'EXPAND') {
         const result = engine.requestExpansion(message.payload.playerId, message.payload.position, message.power);
         if (!result.accepted) self.postMessage({ type: 'EXPANSION_REJECTED', payload: result });
+      } else if (message.type === 'CANCEL_ATTACK') {
+        engine.cancelAttack(message.payload.playerId, message.payload.attackId);
       } else if (message.type === 'BOAT') {
         const result = engine.requestBoat(message.payload.playerId, message.payload.position, message.power);
         if (!result.accepted) self.postMessage({ type: 'BOAT_REJECTED', payload: result });

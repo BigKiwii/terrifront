@@ -216,6 +216,10 @@
     worker?.postMessage({ type: 'EXPAND', payload, power });
   }
 
+  function cancelAttack(playerId, attackId) {
+    worker?.postMessage({ type: 'CANCEL_ATTACK', payload: { playerId, attackId } });
+  }
+
   function requestBoat(payload, power) {
     worker?.postMessage({ type: 'BOAT', payload, power });
   }
@@ -224,7 +228,7 @@
     worker?.postMessage({ type: 'NUKE', payload });
   }
 
-  window.TerriOfflineGame = { start, stop, submitSpawn, requestExpansion, requestBoat, requestNuke, isRunning: () => running };
+  window.TerriOfflineGame = { start, stop, submitSpawn, requestExpansion, cancelAttack, requestBoat, requestNuke, isRunning: () => running };
 
   // Expose preloaded buffers so gameUI.js loadTerrain / loadExpansionTimes can
   // use them directly instead of making a second fetch during the spawn phase.
